@@ -207,7 +207,7 @@ jobs:
           name: build-${{ github.sha }}
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             build.zip
