@@ -11,9 +11,8 @@ import { BootScene } from './scenes/BootScene';
 import { CruzamentoScene } from './scenes/CruzamentoScene';
 import { FimFaseScene } from './scenes/FimFaseScene';
 import { MenuScene } from './scenes/MenuScene';
-import { ESCALA, ativarNitidez } from './scenes/resolucao';
+import { ativarTelaCheia, tamanhoDoCanvas } from './scenes/resolucao';
 import { SelecaoFasesScene } from './scenes/SelecaoFasesScene';
-import { ALTURA, LARGURA } from './scenes/vistaCruzamento';
 import { registrarServiceWorker } from './sw/registrar';
 import { ligarHookDeTeste } from './testeHook';
 import { el } from './ui/dom';
@@ -56,11 +55,11 @@ new Phaser.Game({
   scale: {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
-    // Canvas com ESCALA× mais pixels; as câmeras dão zoom (ver scenes/resolucao.ts).
-    width: LARGURA * ESCALA,
-    height: ALTURA * ESCALA,
+    // Canvas do tamanho do palco (tela cheia e nítida); as câmeras dão zoom (ver scenes/resolucao.ts).
+    width: tamanhoDoCanvas(palco).largura,
+    height: tamanhoDoCanvas(palco).altura,
   },
-  callbacks: { postBoot: ativarNitidez },
+  callbacks: { postBoot: (jogo) => ativarTelaCheia(jogo, palco) },
   scene: [BootScene, MenuScene, SelecaoFasesScene, CruzamentoScene, FimFaseScene],
 });
 

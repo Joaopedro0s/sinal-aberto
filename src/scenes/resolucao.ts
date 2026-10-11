@@ -1,32 +1,65 @@
-// Nitidez das telas 2D (menu, seleção de fases, cruzamento 2D, fim de fase).
+// Tela cheia e nítida para as cenas 2D (menu, seleção de fases, cruzamento 2D, fim de fase).
 //
-// O mundo 2D continua sendo desenhado em coordenadas de LARGURA × ALTURA (400 × 320),
-// mas o canvas do Phaser passa a ter ESCALA vezes mais pixels e a câmera de cada cena
-// dá um zoom de ESCALA. Antes, a imagem de 400 × 320 era ampliada pelo navegador para
-// caber no palco (~1000 px de largura no computador) e ficava borrada.
+// O mundo 2D continua sendo desenhado em coordenadas de LARGURA × ALTURA (400 × 320).
+// O canvas do Phaser, porém, passa a ter EXATAMENTE o tamanho do palco (vezes a densidade
+// de pixels da tela, até 2×), e a câmera de cada cena dá o zoom que faz o mundo caber
+// inteiro no centro. O cenário é desenhado além da borda do mundo (ver vistaCruzamento),
+// então a sobra da tela mostra a continuação da cidade em vez de faixas vazias.
+//
+// Antes: imagem fixa de 400 × 320 ampliada pelo navegador (borrada) e com faixas escuras.
 
 import Phaser from 'phaser';
 import { ALTURA, LARGURA } from './vistaCruzamento';
 
-/** Quantas vezes mais pixels o canvas 2D tem. 3× cobre telas de computador e celulares. */
-export const ESCALA = 3;
+/** Densidade máxima de pixels usada no canvas 2D (2× já fica nítido em celular). */
+const DENSIDADE_MAX = 2;
 
-/** Configura o zoom da câmera de uma cena para o mundo 400 × 320 ocupar o canvas grande. */
+let zoomAtual = 1;
+
+function densidade(): number {
+  return Math.min(DENSIDADE_MAX, Math.max(1, window.devicePixelRatio || 1));
+}
+
+/** Tamanho (em pixels reais) que o canvas deve ter para preencher o palco. */
+export function tamanhoDoCanvas(palco: HTMLElement): { largura: number; altura: number } {
+  const d = densidade();
+  return {
+    largura: Math.max(LARGURA, Math.round((palco.clientWidth || LARGURA) * d)),
+    altura: Math.max(ALTURA, Math.round((palco.clientHeight || ALTURA) * d)),
+  };
+}
+
+/** Zoom e centro da câmera: o mundo 400 × 320 inteiro visível, centralizado. */
 export function ajustarCamera(cena: Phaser.Scene): void {
-  cena.cameras.main.setZoom(ESCALA).centerOn(LARGURA / 2, ALTURA / 2);
+  const { width, height } = cena.scale.gameSize;
+  zoomAtual = Math.min(width / LARGURA, height / ALTURA);
+  const camera = cena.cameras.main;
+  camera.setSize(width, height);
+  camera.setZoom(zoomAtual).centerOn(LARGURA / 2, ALTURA / 2);
 }
 
 /**
- * Liga o ajuste em todas as cenas (inclusive quando uma cena é reiniciada) e faz todo
- * texto do Phaser ser rasterizado na mesma resolução do canvas, para não ficar borrado.
+ * Liga o ajuste em todas as cenas (inclusive quando uma cena é reiniciada), acompanha o
+ * tamanho do palco e faz todo texto do Phaser ser rasterizado na resolução da tela.
  */
-export function ativarNitidez(jogo: Phaser.Game): void {
+export function ativarTelaCheia(jogo: Phaser.Game, palco: HTMLElement): void {
   const fabrica = Phaser.GameObjects.GameObjectFactory.prototype;
   const textoOriginal = fabrica.text;
   fabrica.text = function (this: Phaser.GameObjects.GameObjectFactory, x, y, texto, estilo) {
-    return textoOriginal.call(this, x, y, texto, { ...estilo, resolution: ESCALA });
+    return textoOriginal.call(this, x, y, texto, { ...estilo, resolution: Math.max(1, Math.ceil(zoomAtual)) });
   };
+
   for (const cena of jogo.scene.scenes) {
     cena.events.on(Phaser.Scenes.Events.CREATE, () => ajustarCamera(cena));
   }
+
+  const redimensionar = (): void => {
+    const { largura, altura } = tamanhoDoCanvas(palco);
+    const atual = jogo.scale.gameSize;
+    if (atual.width === largura && atual.height === altura) return;
+    jogo.scale.setGameSize(largura, altura);
+    for (const cena of jogo.scene.getScenes(true)) ajustarCamera(cena);
+  };
+  new ResizeObserver(redimensionar).observe(palco);
+  redimensionar();
 }

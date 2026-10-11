@@ -14,7 +14,7 @@ export class Demo {
   constructor(cena: Phaser.Scene, titulo: string, subtitulo: string) {
     this.vista = new VistaCruzamento(cena, { painel: false, ambulancia: false });
     this.reiniciar();
-    cena.add.rectangle(LARGURA / 2, 44, LARGURA, 74, 0x000000, 0.55).setDepth(30);
+    cena.add.rectangle(LARGURA / 2, 44, LARGURA * 5, 74, 0x000000, 0.55).setDepth(30); // faixa vai de borda a borda em qualquer tela
     cena.add
       .text(LARGURA / 2, 34, titulo, { ...ESTILO_TEXTO, fontSize: '30px', color: '#ffd54f' })
       .setOrigin(0.5)
