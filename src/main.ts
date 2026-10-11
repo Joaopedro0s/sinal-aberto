@@ -11,6 +11,7 @@ import { BootScene } from './scenes/BootScene';
 import { CruzamentoScene } from './scenes/CruzamentoScene';
 import { FimFaseScene } from './scenes/FimFaseScene';
 import { MenuScene } from './scenes/MenuScene';
+import { ESCALA, ativarNitidez } from './scenes/resolucao';
 import { SelecaoFasesScene } from './scenes/SelecaoFasesScene';
 import { ALTURA, LARGURA } from './scenes/vistaCruzamento';
 import { registrarServiceWorker } from './sw/registrar';
@@ -55,9 +56,11 @@ new Phaser.Game({
   scale: {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
-    width: LARGURA,
-    height: ALTURA,
+    // Canvas com ESCALA× mais pixels; as câmeras dão zoom (ver scenes/resolucao.ts).
+    width: LARGURA * ESCALA,
+    height: ALTURA * ESCALA,
   },
+  callbacks: { postBoot: ativarNitidez },
   scene: [BootScene, MenuScene, SelecaoFasesScene, CruzamentoScene, FimFaseScene],
 });
 
