@@ -217,8 +217,42 @@ export class VistaCruzamento {
 
   private desenharCenario(): void {
     const g = this.cena.add.graphics().setDepth(0);
-    // Grama e quarteirões (formas simples, estilo flat).
-    g.fillStyle(0x3d6b45, 1).fillRect(0, 0, LARGURA, ALTURA);
+    // O cenário vai muito além do mundo 400 × 320: em telas com outra proporção a câmera
+    // mostra a continuação da cidade (ruas, quarteirões, árvores) em vez de faixas vazias.
+    // Meio mundo para cada lado basta para qualquer formato de tela (até ~2:1).
+    const X0 = -LARGURA / 2;
+    const Y0 = -ALTURA / 2;
+    const X1 = LARGURA * 1.5;
+    const Y1 = ALTURA * 1.5;
+
+    // Grama
+    g.fillStyle(0x3d6b45, 1).fillRect(X0, Y0, X1 - X0, Y1 - Y0);
+
+    // Quarteirões extras ao redor (gerados sempre iguais), fora da área original
+    const r = (n: number): number => {
+      const x = Math.sin(n * 12.9898) * 43758.5453;
+      return x - Math.floor(x);
+    };
+    let n = 1;
+    // Poucas formas simples: o Phaser redesenha este gráfico a cada quadro.
+    for (let bx = X0 + 16; bx < X1; bx += 130) {
+      for (let by = Y0 + 16; by < Y1; by += 120) {
+        n++;
+        const w = 60 + r(n) * 40;
+        const h = 50 + r(n + 0.5) * 35;
+        const dentroDoMundo = bx + w > -10 && bx < LARGURA + 10 && by + h > -10 && by < ALTURA + 10;
+        const naRua = (bx < CX + MEIO + 12 && bx + w > CX - MEIO - 12) || (by < CY + MEIO + 12 && by + h > CY - MEIO - 12);
+        if (dentroDoMundo || naRua) continue;
+        if (r(n + 0.25) < 0.3) {
+          g.fillStyle(0x2e5535, 1).fillCircle(bx + w / 2, by + h / 2, 14);
+          continue;
+        }
+        g.fillStyle(0x56606a, 1).fillRect(bx, by, w, h);
+        g.fillStyle(0x6f7c86, 1).fillRect(bx + 8, by + 8, w * 0.35, h * 0.3);
+      }
+    }
+
+    // Quarteirões e árvores originais (dentro do mundo)
     g.fillStyle(0x56606a, 1);
     g.fillRoundedRect(CX + MEIO + 14, 10, 70, 60, 6).fillRoundedRect(CX + MEIO + 96, 14, 96, 84, 6);
     g.fillRoundedRect(CX + MEIO + 14, CY + MEIO + 40, 64, ALTURA - CY - MEIO - 46, 6);
@@ -235,16 +269,16 @@ export class VistaCruzamento {
       g.fillCircle(x, y, 14);
     }
 
-    // Pistas.
+    // Pistas (até o fim do cenário estendido).
     g.fillStyle(0x3b3f45, 1);
-    g.fillRect(CX - MEIO, 0, 2 * MEIO, ALTURA);
-    g.fillRect(0, CY - MEIO, LARGURA, 2 * MEIO);
+    g.fillRect(CX - MEIO, Y0, 2 * MEIO, Y1 - Y0);
+    g.fillRect(X0, CY - MEIO, X1 - X0, 2 * MEIO);
     // Calçadas.
     g.lineStyle(3, 0xb0b7bd, 1);
-    g.strokeRect(CX - MEIO - 2, -4, 2 * MEIO + 4, CY - MEIO + 2);
-    g.strokeRect(CX - MEIO - 2, CY + MEIO, 2 * MEIO + 4, ALTURA);
-    g.strokeRect(-4, CY - MEIO - 2, CX - MEIO + 2, 2 * MEIO + 4);
-    g.strokeRect(CX + MEIO, CY - MEIO - 2, LARGURA, 2 * MEIO + 4);
+    g.strokeRect(CX - MEIO - 2, Y0, 2 * MEIO + 4, CY - MEIO + 2 - Y0);
+    g.strokeRect(CX - MEIO - 2, CY + MEIO, 2 * MEIO + 4, Y1 - CY - MEIO);
+    g.strokeRect(X0, CY - MEIO - 2, CX - MEIO + 2 - X0, 2 * MEIO + 4);
+    g.strokeRect(CX + MEIO, CY - MEIO - 2, X1 - CX - MEIO, 2 * MEIO + 4);
     g.fillStyle(0x3b3f45, 1).fillRect(CX - MEIO, CY - MEIO, 2 * MEIO, 2 * MEIO);
 
     // Faixas de pedestre e linhas de retenção.
