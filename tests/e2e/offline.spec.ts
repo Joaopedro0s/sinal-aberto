@@ -34,7 +34,7 @@ test('depois do primeiro acesso, o jogo abre sem internet (Service Worker só na
     await page.getByTestId('btn-fase-1').click();
     await page.getByTestId('btn-comecar').click();
     await page.getByTestId('bloco-abrir-norte').click();
-    await expect(page.getByTestId('linha-1')).toHaveText('abrirSinal("Norte")');
+    await expect(page.getByTestId('linha-1')).toContainText('abrirSinal("Norte")'); // a linha também tem o botão ✕ de apagar
   } finally {
     await context.setOffline(false);
   }
