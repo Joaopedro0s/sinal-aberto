@@ -66,7 +66,7 @@ export class VistaCruzamento {
 
   constructor(
     private readonly cena: Phaser.Scene,
-    private readonly opcoes: { painel: boolean; ambulancia: boolean } = { painel: true, ambulancia: false },
+    private readonly opcoes: { painel: boolean; ambulancia: boolean; cenarioAlto?: boolean } = { painel: true, ambulancia: false },
   ) {
     this.desenharCenario();
     this.alerta = cena.add.rectangle(CX, CY, 2 * MEIO + 8, 2 * MEIO + 8, 0xff1744, 0).setStrokeStyle(4, 0xff1744, 0);
@@ -221,11 +221,14 @@ export class VistaCruzamento {
     const g = this.cena.add.graphics().setDepth(0);
     // O cenário vai muito além do mundo 400 × 320: em telas com outra proporção a câmera
     // mostra a continuação da cidade (ruas, quarteirões, árvores) em vez de faixas vazias.
-    // Meio mundo para cada lado basta para qualquer formato de tela (até ~2:1).
+    // Meio mundo para cada lado basta no jogo (telas até ~2:1). Nas telas de título e de
+    // seleção (cenarioAlto) vai mais longe na vertical: no celular em pé elas ocupam a tela
+    // inteira, bem mais alta que larga. O jogo em si fica leve (o Phaser redesenha tudo a cada quadro).
+    const alto = this.opcoes.cenarioAlto === true;
     const X0 = -LARGURA / 2;
-    const Y0 = -ALTURA / 2;
+    const Y0 = alto ? -ALTURA * 1.6 : -ALTURA / 2;
     const X1 = LARGURA * 1.5;
-    const Y1 = ALTURA * 1.5;
+    const Y1 = alto ? ALTURA * 2.6 : ALTURA * 1.5;
 
     // Grama
     g.fillStyle(0x3d6b45, 1).fillRect(X0, Y0, X1 - X0, Y1 - Y0);

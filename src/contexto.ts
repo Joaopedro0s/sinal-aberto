@@ -35,4 +35,7 @@ export function trocarPainel(...filhos: Node[]): void {
   const { painel } = contexto();
   painel.replaceChildren(...filhos);
   painel.scrollTop = 0;
+  // Na tela de título o painel vira uma camada por cima do cruzamento em tela cheia.
+  const menu = filhos.some((f) => f instanceof HTMLElement && f.classList.contains('tela-menu'));
+  painel.parentElement?.classList.toggle('modo-menu', menu);
 }

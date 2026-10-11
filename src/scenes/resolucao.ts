@@ -60,6 +60,8 @@ export function ativarTelaCheia(jogo: Phaser.Game, palco: HTMLElement): void {
     const atual = jogo.scale.gameSize;
     if (atual.width === largura && atual.height === altura) return;
     jogo.scale.setGameSize(largura, altura);
+    // Recalcula o encaixe do canvas no palco (o Phaser só faz isso sozinho quando a janela muda).
+    jogo.scale.refresh();
     for (const cena of jogo.scene.getScenes(true)) ajustarCamera(cena);
   };
   new ResizeObserver(redimensionar).observe(palco);
