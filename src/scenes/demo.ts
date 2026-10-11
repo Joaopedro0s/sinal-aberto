@@ -12,7 +12,7 @@ export class Demo {
   private acumulado = 0;
 
   constructor(cena: Phaser.Scene, titulo: string, subtitulo: string) {
-    this.vista = new VistaCruzamento(cena, { painel: false, ambulancia: false });
+    this.vista = new VistaCruzamento(cena, { painel: false, ambulancia: false, cenarioAlto: true });
     this.reiniciar();
     cena.add.rectangle(LARGURA / 2, 44, LARGURA * 5, 74, 0x000000, 0.55).setDepth(30); // faixa vai de borda a borda em qualquer tela
     cena.add

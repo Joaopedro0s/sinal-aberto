@@ -649,3 +649,82 @@ p {
 .pulo .tutorial-mascote {
   animation: pulo 0.3s ease-out;
 }
+
+/* ---------- Tela de título (menu de jogo) ---------- */
+/* O cruzamento ocupa a tela toda e o painel vira uma camada transparente por cima. */
+#app.modo-menu {
+  position: relative;
+}
+
+#app.modo-menu #palco {
+  flex: 1 1 auto;
+  height: 100%;
+}
+
+#app.modo-menu #painel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end; /* vertical: parte de baixo da tela */
+  align-items: center; /* horizontal: centro */
+  padding: 16px 16px clamp(20px, 6vh, 72px);
+  background: radial-gradient(ellipse at 50% 85%, rgba(0, 0, 0, 0.55), transparent 65%);
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.tela-menu {
+  pointer-events: auto;
+  width: min(380px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  text-align: center;
+}
+
+.menu-chamada {
+  margin: 0 0 4px;
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.05rem;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8);
+}
+
+.botao-jogar {
+  min-height: 64px;
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  box-shadow: 0 6px 0 #1f6b2a, 0 10px 24px rgba(0, 0, 0, 0.45);
+  animation: pulsar-jogar 1.8s ease-in-out infinite;
+}
+
+.botao-jogar:active {
+  transform: translateY(4px);
+  box-shadow: 0 2px 0 #1f6b2a, 0 6px 14px rgba(0, 0, 0, 0.45);
+}
+
+.tela-menu .botao-secundario {
+  background: rgba(20, 28, 36, 0.85);
+  backdrop-filter: blur(4px);
+}
+
+.tela-menu .versao {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.75);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+/* Pulsa só o brilho (não o tamanho): o botão fica parado para o toque e para os testes. */
+@keyframes pulsar-jogar {
+  0%, 100% { box-shadow: 0 6px 0 #1f6b2a, 0 10px 24px rgba(0, 0, 0, 0.45), 0 0 0 0 rgba(102, 187, 106, 0.0); }
+  50% { box-shadow: 0 6px 0 #1f6b2a, 0 10px 24px rgba(0, 0, 0, 0.45), 0 0 0 8px rgba(102, 187, 106, 0.35); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .botao-jogar {
+    animation: none;
+  }
+}

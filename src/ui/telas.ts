@@ -5,17 +5,13 @@ import { faseLiberada, type Progresso } from '../progresso';
 import { abrirJanela, botao, el, estrelasTexto } from './dom';
 
 export function telaMenu(versao: string, aoJogar: () => void): HTMLElement {
+  // Tela de título: o cruzamento ocupa a tela inteira e estes botões ficam por cima,
+  // centralizados, como num menu de jogo (ver .tela-menu e #app.modo-menu no CSS).
   return el(
     'div',
-    { classe: 'tela' },
-    el('h2', {}, 'Você manda no cruzamento!'),
-    el(
-      'p',
-      {},
-      'Monte as regras dos semáforos com blocos, solte o trânsito e veja se os carros passam sem bater. ' +
-        'É assim que se aprende a programar.',
-    ),
-    botao('▶ Jogar', aoJogar, { classe: 'botao-grande', testid: 'btn-jogar' }),
+    { classe: 'tela tela-menu' },
+    el('p', { classe: 'menu-chamada' }, 'Programe os semáforos. Salve o trânsito.'),
+    botao('▶ JOGAR', aoJogar, { classe: 'botao-grande botao-jogar', testid: 'btn-jogar' }),
     botao('Como jogar', abrirComoJogar, { classe: 'botao-secundario', testid: 'btn-como-jogar' }),
     el('p', { classe: 'versao', testid: 'versao' }, versao),
   );
