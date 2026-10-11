@@ -336,6 +336,8 @@ export class CruzamentoScene extends Phaser.Scene {
     this.game.canvas.style.pointerEvents = 'none';
 
     // Se cair para < 30 FPS nos primeiros 3 segundos, desliga o 3D e volta ao 2D.
+    // `?3d=sempre` mantém o 3D mesmo assim (testes e prints em máquinas sem placa de vídeo).
+    if (new URLSearchParams(location.search).get('3d') === 'sempre') return;
     this.monitorFPS = new MonitorFPS(3000, () => {
       console.warn('FPS muito baixo (< 30). Desligando 3D e usando fallback 2D para a cena.');
       this.desligar3D();
