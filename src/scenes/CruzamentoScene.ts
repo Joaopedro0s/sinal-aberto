@@ -16,7 +16,7 @@ import { EditorCodigo } from '../ui/editorCodigo';
 import { Mesa } from '../ui/mesa';
 import type { AcoesPainel, EstadoPainel, PainelFase } from '../ui/painelFase';
 import { Tutorial } from '../ui/tutorial';
-import { VistaCruzamento } from './vistaCruzamento';
+import { LARGURA, VistaCruzamento } from './vistaCruzamento';
 import { Vista3D } from './vista3d/Vista3D';
 import { MonitorFPS } from './vista3d/detectorWebGL';
 
@@ -119,7 +119,7 @@ export class CruzamentoScene extends Phaser.Scene {
   private criarChuva(): void {
     const emissor = this.add.particles(0, -50, 'carro', {
       frame: [0], // usa frame existente só como forma branca pequena se colocar tint/alpha
-      x: { min: 0, max: this.scale.width },
+      x: { min: 0, max: LARGURA }, // coordenadas do mundo, não do canvas (que é ESCALA× maior)
       y: { min: -50, max: -10 },
       lifespan: 1500,
       speedY: { min: 400, max: 600 },
