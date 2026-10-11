@@ -14,8 +14,6 @@ import { ALTURA, LARGURA } from './vistaCruzamento';
 /** Densidade máxima de pixels usada no canvas 2D (2× já fica nítido em celular). */
 const DENSIDADE_MAX = 2;
 
-let zoomAtual = 1;
-
 function densidade(): number {
   return Math.min(DENSIDADE_MAX, Math.max(1, window.devicePixelRatio || 1));
 }
@@ -32,10 +30,10 @@ export function tamanhoDoCanvas(palco: HTMLElement): { largura: number; altura: 
 /** Zoom e centro da câmera: o mundo 400 × 320 inteiro visível, centralizado. */
 export function ajustarCamera(cena: Phaser.Scene): void {
   const { width, height } = cena.scale.gameSize;
-  zoomAtual = Math.min(width / LARGURA, height / ALTURA);
+  const zoom = Math.min(width / LARGURA, height / ALTURA);
   const camera = cena.cameras.main;
   camera.setSize(width, height);
-  camera.setZoom(zoomAtual).centerOn(LARGURA / 2, ALTURA / 2);
+  camera.setZoom(zoom).centerOn(LARGURA / 2, ALTURA / 2);
 }
 
 /**
@@ -46,7 +44,11 @@ export function ativarTelaCheia(jogo: Phaser.Game, palco: HTMLElement): void {
   const fabrica = Phaser.GameObjects.GameObjectFactory.prototype;
   const textoOriginal = fabrica.text;
   fabrica.text = function (this: Phaser.GameObjects.GameObjectFactory, x, y, texto, estilo) {
-    return textoOriginal.call(this, x, y, texto, { ...estilo, resolution: Math.max(1, Math.ceil(zoomAtual)) });
+    // A resolução vem do tamanho ATUAL do canvas (e não da câmera, que só é ajustada
+    // depois que a cena termina de criar os textos): o texto já nasce na resolução da tela.
+    const { width, height } = this.scene.scale.gameSize;
+    const zoom = Math.min(width / LARGURA, height / ALTURA);
+    return textoOriginal.call(this, x, y, texto, { ...estilo, resolution: Math.min(6, Math.ceil(zoom) + 1) }); // +1: margem para telas com escala do Windows (125%, 150%)
   };
 
   for (const cena of jogo.scene.scenes) {
