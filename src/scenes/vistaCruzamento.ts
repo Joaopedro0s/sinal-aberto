@@ -191,6 +191,8 @@ export class VistaCruzamento {
       s.fundo.setFillStyle(aberto ? 0x2e7d32 : 0xc62828);
       // Não depende só da cor: símbolo e palavra também mudam.
       s.texto.setText(`${via}: ${aberto ? '▲ ABERTO' : '■ FECHADO'}`);
+      // A placa acompanha a largura do texto (a fonte varia entre sistemas e não pode estourar).
+      s.fundo.setSize(Math.max(112, s.texto.width + 14), 26);
     }
   }
 
