@@ -11,21 +11,26 @@
 // se a via sair da tela, o placar gruda na borda com uma seta apontando para ela.
 
 import {
-  AmbientLight,
+  ACESFilmicToneMapping,
   Color,
   DirectionalLight,
   Fog,
   HemisphereLight,
   InstancedMesh,
+  Material,
   Matrix4,
+  Mesh,
   MeshBasicMaterial,
-  MeshLambertMaterial,
+  MeshStandardMaterial,
   Object3D,
+  PCFSoftShadowMap,
+  PMREMGenerator,
   PerspectiveCamera,
   Scene,
   Vector3,
   WebGLRenderer,
 } from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
 import type { Via } from '../../core/ast';
 import { VIAS } from '../../core/ast';
@@ -33,14 +38,14 @@ import { sirene } from '../../audio';
 import type { Carro, Simulacao } from '../../core/simulacao';
 import { COR_HORIZONTE, POS_JOGADOR, criarCeu } from './cidade';
 import {
-  CORES_CARRO,
+  COR_LUZ,
+  Y_ASFALTO,
+  corDoCarro,
   criarCenario,
   criarMeshAmbulancia,
   criarSemaforo,
-  gerarGeometriaCarro,
-  gerarGeometriaFarois,
-  gerarGeometriaLanternas,
-  gerarGeometriaTeto,
+  gerarPecasCarro,
+  type Semaforo,
 } from './geometrias';
 
 // ──────────────────────────────── constantes de layout (unidades 3D; carro ≈ 1 unidade)
@@ -50,7 +55,11 @@ const RECUO = 1.5;
 /** Distância entre carros consecutivos na fila */
 const ESPACO_FILA = 1.65; // carro tem 0,95 de comprimento: deixa ~0,7 de vão entre eles
 /** Altura em que os carros andam (topo do asfalto). */
-const Y_CARRO = 0.1;
+const Y_CARRO = Y_ASFALTO;
+/** Altura da calçada (onde ficam os semáforos). */
+const Y_CALCADA = 0.14;
+/** De onde vem o sol: oeste, à tarde. As sombras dos carros caem de lado, à vista do guarda. */
+const DIRECAO_SOL = { x: -10, y: 14, z: 5 };
 /** De onde um carro novo "vem dirigindo" (atrás do fim da fila). */
 const DISTANCIA_CHEGADA = 22;
 /** Quanto tempo um carro que já cruzou continua visível seguindo em frente. */
@@ -131,14 +140,16 @@ export class Vista3D {
   private readonly matrizTmp = new Matrix4();
   private readonly escondido = new Matrix4().makeTranslation(999, -999, 999);
 
+  /** Lataria (cor de cada carro) e lanternas (acendem ao frear). */
   private readonly corpos: InstancedMesh;
-  private readonly tetos: InstancedMesh;
-  private readonly farois: InstancedMesh;
   private readonly lanternas: InstancedMesh;
+  /** Todas as peças do carro (lataria, vidros, pneus, cromados, faróis, lanternas). */
+  private readonly pecas: InstancedMesh[];
   private readonly corFreio = new Color(0xff2a1a);
   private readonly corLanterna = new Color(0x6a1010);
+  private readonly sol: DirectionalLight;
 
-  private readonly lampadas: Record<Via, Object3D> = {} as Record<Via, Object3D>;
+  private readonly luzes: Record<Via, Semaforo['luzes']> = {} as Record<Via, Semaforo['luzes']>;
   private piscar = 0;
   private ultimoQuadro = performance.now();
 
@@ -172,7 +183,11 @@ export class Vista3D {
     const dpr = window.devicePixelRatio || 1;
     this.renderer = new WebGLRenderer({ antialias: !(telaPequena && dpr >= 2), alpha: false, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(dpr, telaPequena ? 1.5 : 2));
-    this.renderer.shadowMap.enabled = false; // performance em celular de entrada
+    // Cores de cinema (ACES) e sombras suaves do sol. O modo econômico desliga as sombras.
+    this.renderer.toneMapping = ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = PCFSoftShadowMap;
 
     this.canvas = this.renderer.domElement;
     this.canvas.classList.add('vista3d');
@@ -183,43 +198,64 @@ export class Vista3D {
 
     this.scene = new Scene();
     this.scene.background = new Color(COR_HORIZONTE);
-    this.scene.add(criarCeu());
+    this.scene.add(criarCeu(DIRECAO_SOL));
+    // Reflexos: um "estúdio" gerado em código dá brilho à lataria, aos vidros e às vitrines.
+    const pmrem = new PMREMGenerator(this.renderer);
+    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environmentIntensity = 0.5;
+    pmrem.dispose();
 
     this.camera = new PerspectiveCamera(60, 1, 0.05, 260);
 
-    // ── Iluminação: céu + sol de fim de tarde
-    this.scene.add(new HemisphereLight(0xdfefff, 0x4a5a3a, 0.55));
-    this.scene.add(new AmbientLight(0xffffff, 0.25));
-    const sol = new DirectionalLight(0xfff1d6, 1.15);
-    sol.position.set(6, 10, 4);
-    this.scene.add(sol);
+    // ── Iluminação: luz do céu (azulada por cima, cor do chão por baixo) + sol de tarde
+    this.scene.add(new HemisphereLight(0xcfe4ff, 0x6e6552, 1.1));
+    const sol = new DirectionalLight(0xffeccc, 2.6);
+    sol.position.set(DIRECAO_SOL.x, DIRECAO_SOL.y, DIRECAO_SOL.z);
+    sol.castShadow = true;
+    sol.shadow.mapSize.set(telaPequena ? 1024 : 2048, telaPequena ? 1024 : 2048);
+    const cs = sol.shadow.camera;
+    cs.left = -15;
+    cs.right = 15;
+    cs.top = 15;
+    cs.bottom = -15;
+    cs.near = 1;
+    cs.far = 45;
+    sol.shadow.bias = -0.0005;
+    sol.shadow.normalBias = 0.02;
+    this.scene.add(sol, sol.target);
+    this.sol = sol;
 
     this.scene.add(criarCenario());
 
     // ── Semáforos: os dois ficam na esquina em frente ao guarda (nordeste), cada um
     // junto da linha de parada da sua via — o da esquerda é o Norte, o da direita o Leste.
     const semN = criarSemaforo();
-    semN.position.set(MEIO + 0.6, 0.09, -MEIO - RECUO - 0.1);
-    semN.rotation.y = Math.PI;
-    this.scene.add(semN);
-    this.lampadas.Norte = semN.getObjectByName('lampada')!;
+    semN.grupo.position.set(MEIO + 0.6, Y_CALCADA, -MEIO - RECUO - 0.1);
+    semN.grupo.rotation.y = Math.PI;
+    this.scene.add(semN.grupo);
+    this.luzes.Norte = semN.luzes;
 
     const semL = criarSemaforo();
-    semL.position.set(MEIO + RECUO + 0.1, 0.09, -MEIO - 0.6);
-    semL.rotation.y = Math.PI / 2;
-    this.scene.add(semL);
-    this.lampadas.Leste = semL.getObjectByName('lampada')!;
+    semL.grupo.position.set(MEIO + RECUO + 0.1, Y_CALCADA, -MEIO - 0.6);
+    semL.grupo.rotation.y = Math.PI / 2;
+    this.scene.add(semL.grupo);
+    this.luzes.Leste = semL.luzes;
 
-    // ── Carros (instanciados) com faróis e lanternas de freio
-    this.corpos = new InstancedMesh(gerarGeometriaCarro(), new MeshLambertMaterial({ color: 0xffffff }), MAX_CARROS);
-    this.tetos = new InstancedMesh(gerarGeometriaTeto(), new MeshLambertMaterial({ color: 0xffffff }), MAX_CARROS);
-    this.farois = new InstancedMesh(gerarGeometriaFarois(), new MeshBasicMaterial({ color: 0xfff8dc }), MAX_CARROS);
-    this.lanternas = new InstancedMesh(gerarGeometriaLanternas(), new MeshBasicMaterial({ color: 0xffffff }), MAX_CARROS);
-    for (const malha of [this.corpos, this.tetos, this.farois, this.lanternas]) {
+    // ── Carros (instanciados): lataria, vidros, pneus, cromados, faróis e lanternas de freio
+    const geo = gerarPecasCarro();
+    this.corpos = new InstancedMesh(geo.pintura, new MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0.45 }), MAX_CARROS);
+    const vidros = new InstancedMesh(geo.vidro, new MeshStandardMaterial({ color: 0x0c131b, roughness: 0.05, metalness: 0.9 }), MAX_CARROS);
+    const escuro = new InstancedMesh(geo.escuro, new MeshStandardMaterial({ color: 0x17181b, roughness: 0.8 }), MAX_CARROS);
+    const cromado = new InstancedMesh(geo.cromado, new MeshStandardMaterial({ color: 0xd4d8dc, roughness: 0.25, metalness: 1 }), MAX_CARROS);
+    const farois = new InstancedMesh(geo.farois, new MeshBasicMaterial({ color: 0xfff8e8 }), MAX_CARROS);
+    this.lanternas = new InstancedMesh(geo.lanternas, new MeshBasicMaterial({ color: 0xffffff }), MAX_CARROS);
+    this.pecas = [this.corpos, vidros, escuro, cromado, farois, this.lanternas];
+    for (const malha of this.pecas) {
       for (let i = 0; i < MAX_CARROS; i++) malha.setMatrixAt(i, this.escondido);
       malha.frustumCulled = false; // as instâncias andam pela cena inteira
       this.scene.add(malha);
     }
+    this.corpos.castShadow = vidros.castShadow = escuro.castShadow = true;
     for (let i = 0; i < MAX_CARROS; i++) this.lanternas.setColorAt(i, this.corLanterna);
     for (let i = MAX_CARROS - 1; i >= 0; i--) this.instanciasLivres.push(i);
 
@@ -305,6 +341,14 @@ export class Vista3D {
     this.renderer.setPixelRatio(1);
     this.ajustarTamanho();
     this.scene.fog = null;
+    // Sem sombras: a cena passa a ser desenhada uma vez por quadro, e não duas.
+    this.renderer.shadowMap.enabled = false;
+    this.sol.castShadow = false;
+    this.scene.traverse((o) => {
+      const mat = (o as Mesh).material as Material | Material[] | undefined;
+      if (Array.isArray(mat)) mat.forEach((x) => (x.needsUpdate = true));
+      else if (mat) mat.needsUpdate = true;
+    });
   }
 
   destruir(): void {
@@ -486,7 +530,11 @@ export class Vista3D {
         this.posicionar(v);
       }
     }
-    for (const malha of [this.corpos, this.tetos, this.farois, this.lanternas]) {
+    // Só desenha até a última instância em uso (as livres ficariam escondidas, mas custam).
+    let usadas = 0;
+    for (const v of this.carros.values()) if (v.instancia !== null) usadas = Math.max(usadas, v.instancia + 1);
+    for (const malha of this.pecas) {
+      malha.count = usadas;
       malha.instanceMatrix.needsUpdate = true;
     }
     if (this.lanternas.instanceColor) this.lanternas.instanceColor.needsUpdate = true;
@@ -514,16 +562,13 @@ export class Vista3D {
       const luz = v.meshAmb.getObjectByName('luz') as THREE_Mesh | undefined;
       if (luz) {
         const fase = Math.floor(this.piscar / 220) % 2 === 0;
-        (luz.material as MeshLambertMaterial).color.setHex(fase ? 0xff1744 : 0x2979ff);
+        (luz.material as MeshBasicMaterial).color.setHex(fase ? 0xff1744 : 0x2979ff);
       }
       return;
     }
     if (v.instancia === null) return;
     this.matrizTmp.makeRotationY(ROTACAO[v.via]).setPosition(v.posAtual);
-    this.corpos.setMatrixAt(v.instancia, this.matrizTmp);
-    this.tetos.setMatrixAt(v.instancia, this.matrizTmp);
-    this.farois.setMatrixAt(v.instancia, this.matrizTmp);
-    this.lanternas.setMatrixAt(v.instancia, this.matrizTmp);
+    for (const malha of this.pecas) malha.setMatrixAt(v.instancia, this.matrizTmp);
     this.lanternas.setColorAt(v.instancia, v.parado ? this.corFreio : this.corLanterna);
   }
 
@@ -539,10 +584,8 @@ export class Vista3D {
     // Reaproveita instâncias de carros que já foram embora (antes o limite era 30 por fase).
     const idx = this.instanciasLivres.pop() ?? null;
     if (idx !== null) {
-      this.corpos.setColorAt(idx, new Color(CORES_CARRO[c.id % CORES_CARRO.length]));
-      this.tetos.setColorAt(idx, new Color(0x2b3138));
+      this.corpos.setColorAt(idx, corDoCarro(c.id));
       if (this.corpos.instanceColor) this.corpos.instanceColor.needsUpdate = true;
-      if (this.tetos.instanceColor) this.tetos.instanceColor.needsUpdate = true;
     }
     return { ...base, ambulancia: false, meshAmb: null, instancia: idx };
   }
@@ -551,19 +594,22 @@ export class Vista3D {
     if (v.meshAmb) {
       v.meshAmb.removeFromParent();
     } else if (v.instancia !== null) {
-      for (const malha of [this.corpos, this.tetos, this.farois, this.lanternas]) {
+      for (const malha of this.pecas) {
         malha.setMatrixAt(v.instancia, this.escondido);
         malha.instanceMatrix.needsUpdate = true;
       }
       this.instanciasLivres.push(v.instancia);
+      this.instanciasLivres.sort((x, y) => y - x); // o próximo carro pega a menor livre
     }
   }
 
   private atualizarSemaforos(): void {
     const sim = this.sim!;
     for (const via of VIAS) {
-      const lamp = this.lampadas[via] as THREE_Mesh;
-      if (lamp) (lamp.material as MeshBasicMaterial).color.setHex(sim.sinais[via].aberto ? 0x33e06a : 0xff3030);
+      const aberto = sim.sinais[via].aberto;
+      const l = this.luzes[via];
+      l.vermelho.color.setHex(aberto ? COR_LUZ.vermelho.apagada : COR_LUZ.vermelho.acesa);
+      l.verde.color.setHex(aberto ? COR_LUZ.verde.acesa : COR_LUZ.verde.apagada);
     }
   }
 }

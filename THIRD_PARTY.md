@@ -8,11 +8,18 @@ A lista completa, com dependências indiretas, está no SBOM (`reports/sbom.json
 | Componente | Versão | Licença | Uso |
 | --- | --- | --- | --- |
 | [Phaser](https://phaser.io) | 3.90.0 | MIT | Motor 2D: canvas, animações (tweens) e partículas |
-| [Three.js](https://threejs.org) | 0.170.0 | MIT | Motor 3D: renderização do cruzamento isométrico |
+| [Three.js](https://threejs.org) | 0.170.0 | MIT | Motor 3D: cruzamento em primeira pessoa. Inclui os complementos `RoomEnvironment` (reflexos), `RoundedBoxGeometry` e `BufferGeometryUtils`, que vêm no mesmo pacote e têm a mesma licença |
 | eventemitter3 (dependência do Phaser) | 5.0.4 | MIT | Eventos internos do Phaser |
 | [Ajv](https://ajv.js.org) | 8.x | MIT | Validação do `fases.json` pelo schema |
 | fast-deep-equal, json-schema-traverse, require-from-string (dependências do Ajv) | — | MIT | Usadas internamente pelo Ajv |
 | fast-uri (dependência do Ajv) | 3.x | BSD-3-Clause | Usada internamente pelo Ajv |
+
+## Modelos 3D e texturas
+
+Nenhum modelo, textura ou imagem de terceiros. Carros, prédios, lojas, árvores, postes, semáforos e placas
+são montados em código (`src/scenes/vista3d/`), e as texturas (asfalto, calçada, grama, placas de rua e
+letreiros) são desenhadas em canvas na hora (`src/scenes/vista3d/texturas.ts`). O visual se inspira em
+simuladores de loja/cidade em 3D, mas nada foi copiado deles.
 
 ## Usados só no desenvolvimento e nos testes (não vão para o jogo)
 

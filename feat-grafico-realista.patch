@@ -1,0 +1,1490 @@
+diff --git a/THIRD_PARTY.md b/THIRD_PARTY.md
+index 7446c12..738b11e 100644
+--- a/THIRD_PARTY.md
++++ b/THIRD_PARTY.md
+@@ -8,12 +8,19 @@ A lista completa, com dependências indiretas, está no SBOM (`reports/sbom.json
+ | Componente | Versão | Licença | Uso |
+ | --- | --- | --- | --- |
+ | [Phaser](https://phaser.io) | 3.90.0 | MIT | Motor 2D: canvas, animações (tweens) e partículas |
+-| [Three.js](https://threejs.org) | 0.170.0 | MIT | Motor 3D: renderização do cruzamento isométrico |
++| [Three.js](https://threejs.org) | 0.170.0 | MIT | Motor 3D: cruzamento em primeira pessoa. Inclui os complementos `RoomEnvironment` (reflexos), `RoundedBoxGeometry` e `BufferGeometryUtils`, que vêm no mesmo pacote e têm a mesma licença |
+ | eventemitter3 (dependência do Phaser) | 5.0.4 | MIT | Eventos internos do Phaser |
+ | [Ajv](https://ajv.js.org) | 8.x | MIT | Validação do `fases.json` pelo schema |
+ | fast-deep-equal, json-schema-traverse, require-from-string (dependências do Ajv) | — | MIT | Usadas internamente pelo Ajv |
+ | fast-uri (dependência do Ajv) | 3.x | BSD-3-Clause | Usada internamente pelo Ajv |
+ 
++## Modelos 3D e texturas
++
++Nenhum modelo, textura ou imagem de terceiros. Carros, prédios, lojas, árvores, postes, semáforos e placas
++são montados em código (`src/scenes/vista3d/`), e as texturas (asfalto, calçada, grama, placas de rua e
++letreiros) são desenhadas em canvas na hora (`src/scenes/vista3d/texturas.ts`). O visual se inspira em
++simuladores de loja/cidade em 3D, mas nada foi copiado deles.
++
+ ## Usados só no desenvolvimento e nos testes (não vão para o jogo)
+ 
+ | Componente | Licença |
+diff --git a/src/main.ts b/src/main.ts
+index e081e2d..fe0bf6c 100644
+--- a/src/main.ts
++++ b/src/main.ts
+@@ -16,13 +16,15 @@ import { SelecaoFasesScene } from './scenes/SelecaoFasesScene';
+ import { registrarServiceWorker } from './sw/registrar';
+ import { ligarHookDeTeste } from './testeHook';
+ import { el } from './ui/dom';
+-import { suportaWebGL } from './scenes/vista3d/detectorWebGL';
++import { renderizadorDeSoftware, suportaWebGL } from './scenes/vista3d/detectorWebGL';
+ 
+ const parametros = new URLSearchParams(window.location.search);
+ const modoTeste = parametros.get('teste') === '1';
+ if (modoTeste) ligarHookDeTeste();
+ // Ativa o renderizador 3D se WebGL estiver disponível (desativado com ?modo2d=1).
+-const modo3D = suportaWebGL() && parametros.get('modo2d') !== '1';
++// Sem placa de vídeo (desenho por software) abre direto no 2D; `?3d=sempre` força o 3D.
++const modo3D =
++  suportaWebGL() && parametros.get('modo2d') !== '1' && (parametros.get('3d') === 'sempre' || !renderizadorDeSoftware());
+ 
+ const app = document.getElementById('app') as HTMLElement;
+ const palco = el('div', { id: 'palco', role: 'img', rotulo: 'Cruzamento visto de cima com os carros e os semáforos' });
+diff --git a/src/scenes/vista3d/Vista3D.ts b/src/scenes/vista3d/Vista3D.ts
+index 3b54f51..a944749 100644
+--- a/src/scenes/vista3d/Vista3D.ts
++++ b/src/scenes/vista3d/Vista3D.ts
+@@ -11,21 +11,26 @@
+ // se a via sair da tela, o placar gruda na borda com uma seta apontando para ela.
+ 
+ import {
+-  AmbientLight,
++  ACESFilmicToneMapping,
+   Color,
+   DirectionalLight,
+   Fog,
+   HemisphereLight,
+   InstancedMesh,
++  Material,
+   Matrix4,
++  Mesh,
+   MeshBasicMaterial,
+-  MeshLambertMaterial,
++  MeshStandardMaterial,
+   Object3D,
++  PCFSoftShadowMap,
++  PMREMGenerator,
+   PerspectiveCamera,
+   Scene,
+   Vector3,
+   WebGLRenderer,
+ } from 'three';
++import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+ 
+ import type { Via } from '../../core/ast';
+ import { VIAS } from '../../core/ast';
+@@ -33,14 +38,14 @@ import { sirene } from '../../audio';
+ import type { Carro, Simulacao } from '../../core/simulacao';
+ import { COR_HORIZONTE, POS_JOGADOR, criarCeu } from './cidade';
+ import {
+-  CORES_CARRO,
++  COR_LUZ,
++  Y_ASFALTO,
++  corDoCarro,
+   criarCenario,
+   criarMeshAmbulancia,
+   criarSemaforo,
+-  gerarGeometriaCarro,
+-  gerarGeometriaFarois,
+-  gerarGeometriaLanternas,
+-  gerarGeometriaTeto,
++  gerarPecasCarro,
++  type Semaforo,
+ } from './geometrias';
+ 
+ // ──────────────────────────────── constantes de layout (unidades 3D; carro ≈ 1 unidade)
+@@ -50,7 +55,11 @@ const RECUO = 1.5;
+ /** Distância entre carros consecutivos na fila */
+ const ESPACO_FILA = 1.65; // carro tem 0,95 de comprimento: deixa ~0,7 de vão entre eles
+ /** Altura em que os carros andam (topo do asfalto). */
+-const Y_CARRO = 0.1;
++const Y_CARRO = Y_ASFALTO;
++/** Altura da calçada (onde ficam os semáforos). */
++const Y_CALCADA = 0.14;
++/** De onde vem o sol: oeste, à tarde. As sombras dos carros caem de lado, à vista do guarda. */
++const DIRECAO_SOL = { x: -10, y: 14, z: 5 };
+ /** De onde um carro novo "vem dirigindo" (atrás do fim da fila). */
+ const DISTANCIA_CHEGADA = 22;
+ /** Quanto tempo um carro que já cruzou continua visível seguindo em frente. */
+@@ -131,14 +140,16 @@ export class Vista3D {
+   private readonly matrizTmp = new Matrix4();
+   private readonly escondido = new Matrix4().makeTranslation(999, -999, 999);
+ 
++  /** Lataria (cor de cada carro) e lanternas (acendem ao frear). */
+   private readonly corpos: InstancedMesh;
+-  private readonly tetos: InstancedMesh;
+-  private readonly farois: InstancedMesh;
+   private readonly lanternas: InstancedMesh;
++  /** Todas as peças do carro (lataria, vidros, pneus, cromados, faróis, lanternas). */
++  private readonly pecas: InstancedMesh[];
+   private readonly corFreio = new Color(0xff2a1a);
+   private readonly corLanterna = new Color(0x6a1010);
++  private readonly sol: DirectionalLight;
+ 
+-  private readonly lampadas: Record<Via, Object3D> = {} as Record<Via, Object3D>;
++  private readonly luzes: Record<Via, Semaforo['luzes']> = {} as Record<Via, Semaforo['luzes']>;
+   private piscar = 0;
+   private ultimoQuadro = performance.now();
+ 
+@@ -172,7 +183,11 @@ export class Vista3D {
+     const dpr = window.devicePixelRatio || 1;
+     this.renderer = new WebGLRenderer({ antialias: !(telaPequena && dpr >= 2), alpha: false, powerPreference: 'high-performance' });
+     this.renderer.setPixelRatio(Math.min(dpr, telaPequena ? 1.5 : 2));
+-    this.renderer.shadowMap.enabled = false; // performance em celular de entrada
++    // Cores de cinema (ACES) e sombras suaves do sol. O modo econômico desliga as sombras.
++    this.renderer.toneMapping = ACESFilmicToneMapping;
++    this.renderer.toneMappingExposure = 1.0;
++    this.renderer.shadowMap.enabled = true;
++    this.renderer.shadowMap.type = PCFSoftShadowMap;
+ 
+     this.canvas = this.renderer.domElement;
+     this.canvas.classList.add('vista3d');
+@@ -183,43 +198,64 @@ export class Vista3D {
+ 
+     this.scene = new Scene();
+     this.scene.background = new Color(COR_HORIZONTE);
+-    this.scene.add(criarCeu());
++    this.scene.add(criarCeu(DIRECAO_SOL));
++    // Reflexos: um "estúdio" gerado em código dá brilho à lataria, aos vidros e às vitrines.
++    const pmrem = new PMREMGenerator(this.renderer);
++    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
++    this.scene.environmentIntensity = 0.5;
++    pmrem.dispose();
+ 
+     this.camera = new PerspectiveCamera(60, 1, 0.05, 260);
+ 
+-    // ── Iluminação: céu + sol de fim de tarde
+-    this.scene.add(new HemisphereLight(0xdfefff, 0x4a5a3a, 0.55));
+-    this.scene.add(new AmbientLight(0xffffff, 0.25));
+-    const sol = new DirectionalLight(0xfff1d6, 1.15);
+-    sol.position.set(6, 10, 4);
+-    this.scene.add(sol);
++    // ── Iluminação: luz do céu (azulada por cima, cor do chão por baixo) + sol de tarde
++    this.scene.add(new HemisphereLight(0xcfe4ff, 0x6e6552, 1.1));
++    const sol = new DirectionalLight(0xffeccc, 2.6);
++    sol.position.set(DIRECAO_SOL.x, DIRECAO_SOL.y, DIRECAO_SOL.z);
++    sol.castShadow = true;
++    sol.shadow.mapSize.set(telaPequena ? 1024 : 2048, telaPequena ? 1024 : 2048);
++    const cs = sol.shadow.camera;
++    cs.left = -15;
++    cs.right = 15;
++    cs.top = 15;
++    cs.bottom = -15;
++    cs.near = 1;
++    cs.far = 45;
++    sol.shadow.bias = -0.0005;
++    sol.shadow.normalBias = 0.02;
++    this.scene.add(sol, sol.target);
++    this.sol = sol;
+ 
+     this.scene.add(criarCenario());
+ 
+     // ── Semáforos: os dois ficam na esquina em frente ao guarda (nordeste), cada um
+     // junto da linha de parada da sua via — o da esquerda é o Norte, o da direita o Leste.
+     const semN = criarSemaforo();
+-    semN.position.set(MEIO + 0.6, 0.09, -MEIO - RECUO - 0.1);
+-    semN.rotation.y = Math.PI;
+-    this.scene.add(semN);
+-    this.lampadas.Norte = semN.getObjectByName('lampada')!;
++    semN.grupo.position.set(MEIO + 0.6, Y_CALCADA, -MEIO - RECUO - 0.1);
++    semN.grupo.rotation.y = Math.PI;
++    this.scene.add(semN.grupo);
++    this.luzes.Norte = semN.luzes;
+ 
+     const semL = criarSemaforo();
+-    semL.position.set(MEIO + RECUO + 0.1, 0.09, -MEIO - 0.6);
+-    semL.rotation.y = Math.PI / 2;
+-    this.scene.add(semL);
+-    this.lampadas.Leste = semL.getObjectByName('lampada')!;
+-
+-    // ── Carros (instanciados) com faróis e lanternas de freio
+-    this.corpos = new InstancedMesh(gerarGeometriaCarro(), new MeshLambertMaterial({ color: 0xffffff }), MAX_CARROS);
+-    this.tetos = new InstancedMesh(gerarGeometriaTeto(), new MeshLambertMaterial({ color: 0xffffff }), MAX_CARROS);
+-    this.farois = new InstancedMesh(gerarGeometriaFarois(), new MeshBasicMaterial({ color: 0xfff8dc }), MAX_CARROS);
+-    this.lanternas = new InstancedMesh(gerarGeometriaLanternas(), new MeshBasicMaterial({ color: 0xffffff }), MAX_CARROS);
+-    for (const malha of [this.corpos, this.tetos, this.farois, this.lanternas]) {
++    semL.grupo.position.set(MEIO + RECUO + 0.1, Y_CALCADA, -MEIO - 0.6);
++    semL.grupo.rotation.y = Math.PI / 2;
++    this.scene.add(semL.grupo);
++    this.luzes.Leste = semL.luzes;
++
++    // ── Carros (instanciados): lataria, vidros, pneus, cromados, faróis e lanternas de freio
++    const geo = gerarPecasCarro();
++    this.corpos = new InstancedMesh(geo.pintura, new MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0.45 }), MAX_CARROS);
++    const vidros = new InstancedMesh(geo.vidro, new MeshStandardMaterial({ color: 0x0c131b, roughness: 0.05, metalness: 0.9 }), MAX_CARROS);
++    const escuro = new InstancedMesh(geo.escuro, new MeshStandardMaterial({ color: 0x17181b, roughness: 0.8 }), MAX_CARROS);
++    const cromado = new InstancedMesh(geo.cromado, new MeshStandardMaterial({ color: 0xd4d8dc, roughness: 0.25, metalness: 1 }), MAX_CARROS);
++    const farois = new InstancedMesh(geo.farois, new MeshBasicMaterial({ color: 0xfff8e8 }), MAX_CARROS);
++    this.lanternas = new InstancedMesh(geo.lanternas, new MeshBasicMaterial({ color: 0xffffff }), MAX_CARROS);
++    this.pecas = [this.corpos, vidros, escuro, cromado, farois, this.lanternas];
++    for (const malha of this.pecas) {
+       for (let i = 0; i < MAX_CARROS; i++) malha.setMatrixAt(i, this.escondido);
+       malha.frustumCulled = false; // as instâncias andam pela cena inteira
+       this.scene.add(malha);
+     }
++    this.corpos.castShadow = vidros.castShadow = escuro.castShadow = true;
+     for (let i = 0; i < MAX_CARROS; i++) this.lanternas.setColorAt(i, this.corLanterna);
+     for (let i = MAX_CARROS - 1; i >= 0; i--) this.instanciasLivres.push(i);
+ 
+@@ -305,6 +341,14 @@ export class Vista3D {
+     this.renderer.setPixelRatio(1);
+     this.ajustarTamanho();
+     this.scene.fog = null;
++    // Sem sombras: a cena passa a ser desenhada uma vez por quadro, e não duas.
++    this.renderer.shadowMap.enabled = false;
++    this.sol.castShadow = false;
++    this.scene.traverse((o) => {
++      const mat = (o as Mesh).material as Material | Material[] | undefined;
++      if (Array.isArray(mat)) mat.forEach((x) => (x.needsUpdate = true));
++      else if (mat) mat.needsUpdate = true;
++    });
+   }
+ 
+   destruir(): void {
+@@ -486,7 +530,11 @@ export class Vista3D {
+         this.posicionar(v);
+       }
+     }
+-    for (const malha of [this.corpos, this.tetos, this.farois, this.lanternas]) {
++    // Só desenha até a última instância em uso (as livres ficariam escondidas, mas custam).
++    let usadas = 0;
++    for (const v of this.carros.values()) if (v.instancia !== null) usadas = Math.max(usadas, v.instancia + 1);
++    for (const malha of this.pecas) {
++      malha.count = usadas;
+       malha.instanceMatrix.needsUpdate = true;
+     }
+     if (this.lanternas.instanceColor) this.lanternas.instanceColor.needsUpdate = true;
+@@ -514,16 +562,13 @@ export class Vista3D {
+       const luz = v.meshAmb.getObjectByName('luz') as THREE_Mesh | undefined;
+       if (luz) {
+         const fase = Math.floor(this.piscar / 220) % 2 === 0;
+-        (luz.material as MeshLambertMaterial).color.setHex(fase ? 0xff1744 : 0x2979ff);
++        (luz.material as MeshBasicMaterial).color.setHex(fase ? 0xff1744 : 0x2979ff);
+       }
+       return;
+     }
+     if (v.instancia === null) return;
+     this.matrizTmp.makeRotationY(ROTACAO[v.via]).setPosition(v.posAtual);
+-    this.corpos.setMatrixAt(v.instancia, this.matrizTmp);
+-    this.tetos.setMatrixAt(v.instancia, this.matrizTmp);
+-    this.farois.setMatrixAt(v.instancia, this.matrizTmp);
+-    this.lanternas.setMatrixAt(v.instancia, this.matrizTmp);
++    for (const malha of this.pecas) malha.setMatrixAt(v.instancia, this.matrizTmp);
+     this.lanternas.setColorAt(v.instancia, v.parado ? this.corFreio : this.corLanterna);
+   }
+ 
+@@ -539,10 +584,8 @@ export class Vista3D {
+     // Reaproveita instâncias de carros que já foram embora (antes o limite era 30 por fase).
+     const idx = this.instanciasLivres.pop() ?? null;
+     if (idx !== null) {
+-      this.corpos.setColorAt(idx, new Color(CORES_CARRO[c.id % CORES_CARRO.length]));
+-      this.tetos.setColorAt(idx, new Color(0x2b3138));
++      this.corpos.setColorAt(idx, corDoCarro(c.id));
+       if (this.corpos.instanceColor) this.corpos.instanceColor.needsUpdate = true;
+-      if (this.tetos.instanceColor) this.tetos.instanceColor.needsUpdate = true;
+     }
+     return { ...base, ambulancia: false, meshAmb: null, instancia: idx };
+   }
+@@ -551,19 +594,22 @@ export class Vista3D {
+     if (v.meshAmb) {
+       v.meshAmb.removeFromParent();
+     } else if (v.instancia !== null) {
+-      for (const malha of [this.corpos, this.tetos, this.farois, this.lanternas]) {
++      for (const malha of this.pecas) {
+         malha.setMatrixAt(v.instancia, this.escondido);
+         malha.instanceMatrix.needsUpdate = true;
+       }
+       this.instanciasLivres.push(v.instancia);
++      this.instanciasLivres.sort((x, y) => y - x); // o próximo carro pega a menor livre
+     }
+   }
+ 
+   private atualizarSemaforos(): void {
+     const sim = this.sim!;
+     for (const via of VIAS) {
+-      const lamp = this.lampadas[via] as THREE_Mesh;
+-      if (lamp) (lamp.material as MeshBasicMaterial).color.setHex(sim.sinais[via].aberto ? 0x33e06a : 0xff3030);
++      const aberto = sim.sinais[via].aberto;
++      const l = this.luzes[via];
++      l.vermelho.color.setHex(aberto ? COR_LUZ.vermelho.apagada : COR_LUZ.vermelho.acesa);
++      l.verde.color.setHex(aberto ? COR_LUZ.verde.acesa : COR_LUZ.verde.apagada);
+     }
+   }
+ }
+diff --git a/src/scenes/vista3d/cidade.ts b/src/scenes/vista3d/cidade.ts
+index e87569a..94286dd 100644
+--- a/src/scenes/vista3d/cidade.ts
++++ b/src/scenes/vista3d/cidade.ts
+@@ -1,29 +1,39 @@
+ // Cidade em volta do cruzamento para a vista em primeira pessoa.
+-// Tudo é gerado em código e desenhado com InstancedMesh: cada tipo de objeto
+-// (prédio, janela, tronco, copa, poste) vira UMA chamada de desenho, o que mantém
+-// o celular leve mesmo com dezenas de prédios.
++// Tudo é gerado em código e desenhado com InstancedMesh (ou geometrias fundidas): cada tipo
++// de objeto (prédio, janela, toldo, letreiro, árvore, poste…) vira UMA chamada de desenho,
++// o que mantém o celular leve mesmo com dezenas de prédios e lojas.
+ 
+ import {
+   BackSide,
+   BoxGeometry,
+   BufferAttribute,
++  BufferGeometry,
+   Color,
+-  ConeGeometry,
+   CylinderGeometry,
++  IcosahedronGeometry,
++  type Material,
+   InstancedMesh,
+   Matrix4,
+   Mesh,
+   MeshBasicMaterial,
+   MeshLambertMaterial,
++  MeshStandardMaterial,
+   Object3D,
++  PlaneGeometry,
+   SphereGeometry,
+ } from 'three';
++import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
++
++import { LOJAS, texturaLetreiros } from './texturas';
+ 
+ /** Onde o jogador fica: na calçada da esquina sudoeste, olhando para o cruzamento. */
+ export const POS_JOGADOR = { x: -2.1, z: 2.1 };
+ 
+-/** Borda externa da calçada (metade da pista + largura da calçada). */
++/** Referência das calçadas (árvores e postes ficam um pouco para dentro disso). */
+ const BORDA = 2.8;
++/** Onde começam as fachadas dos prédios. */
++const FACHADA = BORDA + 0.4;
++const Y_CALCADA = 0.14;
+ 
+ /** Gerador pseudoaleatório com semente: a cidade é sempre igual (testes e prints estáveis). */
+ function rng(semente: number): () => number {
+@@ -41,146 +51,273 @@ interface Predio {
+   h: number;
+   d: number;
+   cor: number;
++  /** Direção da fachada que dá para a rua (normal da parede). */
++  fx: number;
++  fz: number;
++  loja: number;
+ }
+ 
+-const CORES_PREDIO = [0x8d99a6, 0x6f7d8c, 0xb0a99f, 0x9e8f80, 0x7b8794, 0xc2b8a3, 0x5f6b78];
++/** Fachadas em tons de reboco pintado, como num bairro comercial. */
++const CORES_PREDIO = [0xe8dcc4, 0xc9826b, 0x9fb7c9, 0xe6b8a2, 0xb7b1a6, 0xf1ede4, 0x8fa58c, 0xd8c08f, 0x7d8a99];
++const CORES_TOLDO = [0xc62828, 0x1565c0, 0x2e7d32, 0xef6c00, 0x6a1b9a, 0x00838f, 0x37474f];
+ 
+ function planejarPredios(): Predio[] {
+   const r = rng(42);
+   const lista: Predio[] = [];
++  const cor = (): number => CORES_PREDIO[Math.floor(r() * CORES_PREDIO.length)];
+   for (const sx of [-1, 1]) {
+     for (const sz of [-1, 1]) {
+       // Fileira ao longo da rua Norte-Sul (fachada virada para a rua)
+       for (let d = 4.2; d < 42; d += 3.4) {
+         const w = 2.2 + r() * 1.2;
+         const dd = 2.6 + r() * 0.5;
+-        lista.push({ x: sx * (BORDA + 0.4 + w / 2), z: sz * d, w, h: 2.2 + r() * 5.5, d: dd, cor: CORES_PREDIO[Math.floor(r() * CORES_PREDIO.length)] });
++        lista.push({ x: sx * (FACHADA + w / 2), z: sz * d, w, h: 2.2 + r() * 5.5, d: dd, cor: cor(), fx: -sx, fz: 0, loja: Math.floor(r() * LOJAS.length) });
+       }
+       // Fileira ao longo da rua Leste-Oeste (começa mais longe para não encostar na outra)
+       for (let d = 7.6; d < 42; d += 3.4) {
+         const w = 2.6 + r() * 0.5;
+         const dd = 2.2 + r() * 1.2;
+-        lista.push({ x: sx * d, z: sz * (BORDA + 0.4 + dd / 2), w, h: 2.2 + r() * 5.5, d: dd, cor: CORES_PREDIO[Math.floor(r() * CORES_PREDIO.length)] });
++        lista.push({ x: sx * d, z: sz * (FACHADA + dd / 2), w, h: 2.2 + r() * 5.5, d: dd, cor: cor(), fx: 0, fz: -sz, loja: Math.floor(r() * LOJAS.length) });
+       }
+     }
+   }
+   return lista;
+ }
+ 
++/** Cria uma InstancedMesh já com sombra configurada. */
++function instancias(geo: BufferGeometry, mat: Material, qtd: number, projeta = true, recebe = false): InstancedMesh {
++  const m = new InstancedMesh(geo, mat, Math.max(1, qtd));
++  m.count = qtd;
++  m.castShadow = projeta;
++  m.receiveShadow = recebe;
++  return m;
++}
++
+ export function criarCidade(): Object3D {
+   const raiz = new Object3D();
+   raiz.name = 'cidade';
+   const m = new Matrix4();
++  const tmp = new Object3D();
+   const predios = planejarPredios();
+   const r = rng(7);
++  const cor = new Color();
++
++  // Prédios, janelas e tudo que fica nas fachadas ficam num grupo próprio: a vista de cima
++  // "achata" esse grupo para os prédios não esconderem as filas.
++  const grupoPredios = new Object3D();
++  grupoPredios.name = 'predios';
++  raiz.add(grupoPredios);
+ 
+-  // ── Prédios
+-  const corpos = new InstancedMesh(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0xffffff }), predios.length);
++  // ── Corpo dos prédios e platibanda (a borda saliente no alto)
++  const reboco = new MeshLambertMaterial({ color: 0xffffff });
++  const corpos = instancias(new BoxGeometry(1, 1, 1), reboco, predios.length, true, true);
++  const platibandas = instancias(new BoxGeometry(1, 1, 1), reboco, predios.length, true, false);
+   predios.forEach((p, i) => {
+     m.makeScale(p.w, p.h, p.d).setPosition(p.x, p.h / 2, p.z);
+     corpos.setMatrixAt(i, m);
+-    corpos.setColorAt(i, new Color(p.cor));
++    corpos.setColorAt(i, cor.setHex(p.cor));
++    m.makeScale(p.w + 0.08, 0.1, p.d + 0.08).setPosition(p.x, p.h + 0.02, p.z);
++    platibandas.setMatrixAt(i, m);
++    platibandas.setColorAt(i, cor.setHex(p.cor).multiplyScalar(0.78));
+   });
+-  // Prédios e janelas ficam num grupo próprio: a vista de cima "achata" esse grupo
+-  // para os prédios não esconderem as filas.
+-  const grupoPredios = new Object3D();
+-  grupoPredios.name = 'predios';
+-  grupoPredios.add(corpos);
+-  raiz.add(grupoPredios);
++  grupoPredios.add(corpos, platibandas);
+ 
+-  // ── Janelas (nas 4 fachadas), algumas acesas
+-  const janelas: { x: number; y: number; z: number; rotY: number; acesa: boolean }[] = [];
++  // ── Janelas a partir do 1º andar, algumas com a luz acesa. Só nas paredes que dão
++  // para a rua ou para os lados: os fundos dos prédios nunca aparecem (economiza ~¼).
++  const janelas: { x: number; y: number; z: number; rotY: number; acesa: boolean; cor: number }[] = [];
+   for (const p of predios) {
+-    const andares = Math.max(1, Math.floor((p.h - 0.6) / 0.75));
++    const andares = Math.max(1, Math.floor((p.h - 1.0) / 0.62));
++    const faces: [number, number][] = ([[0, 1], [0, -1], [1, 0], [-1, 0]] as [number, number][]).filter(([nx, nz]) => nx * p.fx + nz * p.fz >= 0);
+     for (let a = 0; a < andares; a++) {
+-      const y = 0.7 + a * 0.75;
+-      for (let c = -p.w / 2 + 0.45; c <= p.w / 2 - 0.35; c += 0.6) {
+-        janelas.push({ x: p.x + c, y, z: p.z + p.d / 2 + 0.01, rotY: 0, acesa: r() < 0.25 });
+-        janelas.push({ x: p.x + c, y, z: p.z - p.d / 2 - 0.01, rotY: 0, acesa: r() < 0.25 });
+-      }
+-      for (let c = -p.d / 2 + 0.45; c <= p.d / 2 - 0.35; c += 0.6) {
+-        janelas.push({ x: p.x + p.w / 2 + 0.01, y, z: p.z + c, rotY: Math.PI / 2, acesa: r() < 0.25 });
+-        janelas.push({ x: p.x - p.w / 2 - 0.01, y, z: p.z + c, rotY: Math.PI / 2, acesa: r() < 0.25 });
++      const y = 1.2 + a * 0.62;
++      if (y > p.h - 0.3) break;
++      for (const [nx, nz] of faces) {
++        const larg = nx === 0 ? p.w : p.d;
++        for (let c = -larg / 2 + 0.4; c <= larg / 2 - 0.3; c += 0.55) {
++          janelas.push({
++            x: p.x + (nx === 0 ? c : nx * (p.w / 2 + 0.006)),
++            y,
++            z: p.z + (nz === 0 ? c : nz * (p.d / 2 + 0.006)),
++            rotY: Math.atan2(nx, nz),
++            acesa: r() < 0.12,
++            cor: p.cor,
++          });
++        }
+       }
+     }
+   }
+-  const malhaJanela = new InstancedMesh(new BoxGeometry(0.3, 0.36, 0.02), new MeshBasicMaterial({ color: 0xffffff }), janelas.length);
+-  const corAcesa = new Color(0xffe08a);
+-  const corApagada = new Color(0x3d5a73);
++  // Moldura (um tom mais claro que a parede) + vidro escuro e espelhado (reflete o céu).
++  // Planos de 2 triângulos cada. A moldura com pouco contraste evita o "chiado" de longe.
++  const molduras = instancias(new PlaneGeometry(0.34, 0.4), new MeshLambertMaterial({ color: 0xffffff }), janelas.length, false);
++  const vidros = instancias(new PlaneGeometry(0.27, 0.33).translate(0, 0, 0.006), new MeshStandardMaterial({ color: 0xffffff, roughness: 0.12, metalness: 0.75 }), janelas.length, false);
++  const corAcesa = new Color(0xffe2a0);
++  const corApagada = new Color(0x34506a);
++  const branco = new Color(0xffffff);
+   janelas.forEach((j, i) => {
+     m.makeRotationY(j.rotY).setPosition(j.x, j.y, j.z);
+-    malhaJanela.setMatrixAt(i, m);
+-    malhaJanela.setColorAt(i, j.acesa ? corAcesa : corApagada);
++    molduras.setMatrixAt(i, m);
++    molduras.setColorAt(i, cor.setHex(j.cor).lerp(branco, 0.45));
++    vidros.setMatrixAt(i, m);
++    vidros.setColorAt(i, j.acesa ? corAcesa : corApagada);
++  });
++  grupoPredios.add(molduras, vidros);
++
++  // ── Lojas no térreo: vitrine, toldo colorido e letreiro com o nome
++  const vitrines = instancias(new BoxGeometry(1, 1, 1), new MeshStandardMaterial({ color: 0x1b2a36, roughness: 0.06, metalness: 0.85 }), predios.length, false);
++  const portas = instancias(new BoxGeometry(1, 1, 1), new MeshStandardMaterial({ color: 0x3b3f44, roughness: 0.5, metalness: 0.5 }), predios.length, false);
++  const toldos = instancias(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0xffffff }), predios.length, true);
++  const placasLojas: BufferGeometry[] = [];
++  predios.forEach((p, i) => {
++    const largFachada = p.fx !== 0 ? p.d : p.w;
++    const rot = Math.atan2(p.fx, p.fz); // gira o "+z" local para a direção da fachada
++    // Ponto no meio da fachada, rente à parede
++    const px = p.x + p.fx * (p.w / 2);
++    const pz = p.z + p.fz * (p.d / 2);
++    const colocar = (alvo: InstancedMesh, w: number, h: number, d: number, y: number, fora: number, inclina = 0): void => {
++      tmp.position.set(px + p.fx * fora, y, pz + p.fz * fora);
++      tmp.rotation.set(0, rot, 0);
++      tmp.rotateX(inclina);
++      tmp.scale.set(w, h, d);
++      tmp.updateMatrix();
++      alvo.setMatrixAt(i, tmp.matrix);
++    };
++    colocar(vitrines, largFachada * 0.62, 0.42, 0.03, Y_CALCADA + 0.25, 0.01);
++    // A porta fica num canto da vitrine
++    tmp.position.set(px + p.fx * 0.012, Y_CALCADA + 0.23, pz + p.fz * 0.012);
++    tmp.rotation.set(0, rot, 0);
++    tmp.translateX(largFachada * 0.36);
++    tmp.scale.set(largFachada * 0.16, 0.46, 0.035);
++    tmp.updateMatrix();
++    portas.setMatrixAt(i, tmp.matrix);
++    colocar(toldos, largFachada * 0.82, 0.03, 0.3, Y_CALCADA + 0.56, 0.14, 0.28);
++    toldos.setColorAt(i, cor.setHex(CORES_TOLDO[(p.loja + i) % CORES_TOLDO.length]));
++
++    // Letreiro: um retângulo da imagem com todos os letreiros (cada loja é uma faixa)
++    const g = new PlaneGeometry(Math.min(1.7, largFachada * 0.8), 0.22);
++    const uv = g.attributes.uv;
++    const v0 = 1 - (p.loja + 1) / LOJAS.length;
++    const v1 = 1 - p.loja / LOJAS.length;
++    for (let k = 0; k < uv.count; k++) uv.setY(k, uv.getY(k) > 0.5 ? v1 - 0.004 : v0 + 0.004);
++    g.rotateY(rot);
++    g.translate(px + p.fx * 0.02, Y_CALCADA + 0.84, pz + p.fz * 0.02);
++    placasLojas.push(g);
+   });
+-  grupoPredios.add(malhaJanela);
++  grupoPredios.add(vitrines, portas, toldos);
++  const letreiros = new Mesh(mergeGeometries(placasLojas)!, new MeshStandardMaterial({ map: texturaLetreiros(), roughness: 0.45, emissive: 0xffffff, emissiveMap: texturaLetreiros(), emissiveIntensity: 0.25 }));
++  grupoPredios.add(letreiros);
++
++  // ── Telhado: caixas d'água azuis e aparelhos de ar-condicionado
++  const caixas: [number, number, number][] = [];
++  const arCond: [number, number, number][] = [];
++  for (const p of predios) {
++    if (r() < 0.55) caixas.push([p.x + (r() - 0.5) * p.w * 0.5, p.h + 0.07, p.z + (r() - 0.5) * p.d * 0.5]);
++    const n = Math.floor(r() * 3);
++    for (let k = 0; k < n; k++) arCond.push([p.x + (r() - 0.5) * p.w * 0.7, p.h + 0.07, p.z + (r() - 0.5) * p.d * 0.7]);
++  }
++  const malhaCaixas = instancias(new CylinderGeometry(0.2, 0.17, 0.28, 12), new MeshStandardMaterial({ color: 0x2f6db5, roughness: 0.5 }), caixas.length);
++  caixas.forEach(([x, y, z], i) => malhaCaixas.setMatrixAt(i, m.makeTranslation(x, y + 0.14, z)));
++  const malhaAr = instancias(new BoxGeometry(0.26, 0.16, 0.2), new MeshStandardMaterial({ color: 0xd5d8dc, roughness: 0.5, metalness: 0.3 }), arCond.length);
++  arCond.forEach(([x, y, z], i) => malhaAr.setMatrixAt(i, m.makeTranslation(x, y + 0.08, z)));
++  grupoPredios.add(malhaCaixas, malhaAr);
+ 
+   // ── Árvores e postes nas calçadas
+   const arvores: [number, number][] = [];
+-  const postes: [number, number][] = [];
++  const postes: [number, number, number][] = []; // x, z, rotação (o braço aponta para a rua)
+   for (let d = 4.5; d < 40; d += 4.2) {
+     for (const s of [-1, 1]) {
+       arvores.push([s * (BORDA - 0.35), d * (s === 1 ? 1 : -1)]);
+       arvores.push([d * (s === 1 ? -1 : 1), s * (BORDA - 0.35)]);
+-      postes.push([-s * (BORDA - 0.25), d * s + 2.1]);
+-      postes.push([d * s + 2.1, -s * (BORDA - 0.25)]);
++      const xp = -s * (BORDA - 0.25);
++      postes.push([xp, d * s + 2.1, xp > 0 ? Math.PI : 0]);
++      const zp = -s * (BORDA - 0.25);
++      postes.push([d * s + 2.1, zp, zp > 0 ? Math.PI / 2 : -Math.PI / 2]);
+     }
+   }
+   // Não coloca nada em cima do ponto onde o jogador fica (esquina sudoeste).
+-  const longeDoJogador = ([x, z]: [number, number]): boolean => Math.hypot(x - POS_JOGADOR.x, z - POS_JOGADOR.z) > 1.6;
+-  arvores.splice(0, arvores.length, ...arvores.filter(longeDoJogador));
+-  postes.splice(0, postes.length, ...postes.filter(longeDoJogador));
+-
+-  const troncos = new InstancedMesh(new CylinderGeometry(0.05, 0.07, 0.6, 5), new MeshLambertMaterial({ color: 0x5d3a1a }), arvores.length);
+-  const copas = new InstancedMesh(new ConeGeometry(0.38, 0.9, 6), new MeshLambertMaterial({ color: 0xffffff }), arvores.length);
+-  arvores.forEach(([x, z], i) => {
+-    const esc = 0.85 + r() * 0.4;
+-    m.makeScale(esc, esc, esc).setPosition(x, 0.3 * esc, z);
++  const longe = (x: number, z: number): boolean => Math.hypot(x - POS_JOGADOR.x, z - POS_JOGADOR.z) > 1.6;
++  const arvoresOk = arvores.filter(([x, z]) => longe(x, z));
++  const postesOk = postes.filter(([x, z]) => longe(x, z));
++
++  const troncos = instancias(new CylinderGeometry(0.035, 0.055, 0.7, 7), new MeshLambertMaterial({ color: 0x5b4030 }), arvoresOk.length);
++  const copaGeo = mergeGeometries([
++    new IcosahedronGeometry(0.42, 1),
++    new IcosahedronGeometry(0.3, 0).translate(0.22, -0.08, 0.1),
++    new IcosahedronGeometry(0.28, 0).translate(-0.18, 0.05, -0.15),
++  ])!;
++  const copas = instancias(copaGeo, new MeshLambertMaterial({ color: 0xffffff, flatShading: true }), arvoresOk.length, true, true);
++  const canteiros = instancias(new BoxGeometry(0.42, 0.02, 0.42), new MeshLambertMaterial({ color: 0x4a3626 }), arvoresOk.length, false, true);
++  const VERDES = [0x3d7a3a, 0x4f8c3f, 0x2f6a35, 0x5a9444];
++  arvoresOk.forEach(([x, z], i) => {
++    const esc = 0.85 + r() * 0.35;
++    m.makeScale(esc, esc, esc).setPosition(x, Y_CALCADA + 0.35 * esc, z);
+     troncos.setMatrixAt(i, m);
+-    m.makeScale(esc, esc, esc).setPosition(x, 0.95 * esc, z);
+-    copas.setMatrixAt(i, m);
+-    copas.setColorAt(i, new Color(r() < 0.5 ? 0x2e6b3a : 0x3f7f45));
++    tmp.position.set(x, Y_CALCADA + 1.0 * esc, z);
++    tmp.rotation.set(0, r() * Math.PI * 2, 0);
++    tmp.scale.set(esc, esc * 0.9, esc);
++    tmp.updateMatrix();
++    copas.setMatrixAt(i, tmp.matrix);
++    copas.setColorAt(i, cor.setHex(VERDES[Math.floor(r() * VERDES.length)]));
++    canteiros.setMatrixAt(i, m.makeTranslation(x, Y_CALCADA + 0.005, z));
+   });
+-  raiz.add(troncos, copas);
+-
+-  const hastes = new InstancedMesh(new CylinderGeometry(0.025, 0.03, 1.5, 5), new MeshLambertMaterial({ color: 0x6b7178 }), postes.length);
+-  const luminarias = new InstancedMesh(new BoxGeometry(0.16, 0.05, 0.1), new MeshBasicMaterial({ color: 0xfff3c4 }), postes.length);
+-  postes.forEach(([x, z], i) => {
+-    m.makeTranslation(x, 0.75, z);
+-    hastes.setMatrixAt(i, m);
+-    m.makeTranslation(x, 1.5, z);
+-    luminarias.setMatrixAt(i, m);
++  raiz.add(troncos, copas, canteiros);
++
++  // Poste de luz com braço curvo por cima da pista
++  const posteGeo = mergeGeometries([
++    new CylinderGeometry(0.022, 0.03, 1.7, 8).translate(0, 0.85, 0),
++    new CylinderGeometry(0.014, 0.014, 0.55, 6).rotateZ(Math.PI / 2 - 0.25).translate(0.26, 1.74, 0),
++  ])!;
++  const hastes = instancias(posteGeo, new MeshStandardMaterial({ color: 0x5f656c, roughness: 0.45, metalness: 0.6 }), postesOk.length);
++  const cabecas = instancias(new BoxGeometry(0.2, 0.04, 0.09), new MeshStandardMaterial({ color: 0x3a3f45, roughness: 0.5, metalness: 0.4 }), postesOk.length);
++  postesOk.forEach(([x, z, rot], i) => {
++    tmp.position.set(x, Y_CALCADA, z);
++    tmp.rotation.set(0, rot, 0);
++    tmp.scale.set(1, 1, 1);
++    tmp.updateMatrix();
++    hastes.setMatrixAt(i, tmp.matrix);
++    tmp.translateX(0.56);
++    tmp.translateY(1.8);
++    tmp.updateMatrix();
++    cabecas.setMatrixAt(i, tmp.matrix);
+   });
+-  raiz.add(hastes, luminarias);
++  raiz.add(hastes, cabecas);
+ 
+   // ── Posto do guarda: plataforma onde o jogador fica em pé
+-  const posto = new Mesh(new CylinderGeometry(0.42, 0.48, 0.3, 10), new MeshLambertMaterial({ color: 0xf2c94c }));
+-  posto.position.set(POS_JOGADOR.x, 0.24, POS_JOGADOR.z);
++  const posto = new Mesh(new CylinderGeometry(0.42, 0.48, 0.3, 20), new MeshLambertMaterial({ color: 0xf2c94c }));
++  posto.position.set(POS_JOGADOR.x, Y_CALCADA + 0.15, POS_JOGADOR.z);
++  posto.castShadow = posto.receiveShadow = true;
+   raiz.add(posto);
+-  const faixaPosto = new Mesh(new CylinderGeometry(0.43, 0.43, 0.06, 10), new MeshLambertMaterial({ color: 0x222222 }));
+-  faixaPosto.position.set(POS_JOGADOR.x, 0.3, POS_JOGADOR.z);
++  const faixaPosto = new Mesh(new CylinderGeometry(0.43, 0.43, 0.06, 20), new MeshLambertMaterial({ color: 0x222222 }));
++  faixaPosto.position.set(POS_JOGADOR.x, Y_CALCADA + 0.21, POS_JOGADOR.z);
+   raiz.add(faixaPosto);
+ 
+   return raiz;
+ }
+ 
+ /** Cor do horizonte: o nevoeiro usa a mesma cor para a cidade "sumir" no céu. */
+-export const COR_HORIZONTE = 0xcfe3ef;
++export const COR_HORIZONTE = 0xd6e6f0;
+ 
+-/** Domo de céu com degradê (azul em cima, claro no horizonte). */
+-export function criarCeu(): Mesh {
+-  const geo = new SphereGeometry(120, 24, 12);
++/** Domo de céu com degradê (azul em cima, claro no horizonte) e um brilho em volta do sol. */
++export function criarCeu(direcaoSol: { x: number; y: number; z: number }): Mesh {
++  const geo = new SphereGeometry(120, 32, 16);
+   const pos = geo.attributes.position;
+   const cores = new Float32Array(pos.count * 3);
+-  const topo = new Color(0x4f93cf);
++  const topo = new Color(0x3d7fc4);
+   const horizonte = new Color(COR_HORIZONTE);
++  const brilho = new Color(0xfff4dc);
++  const len = Math.hypot(direcaoSol.x, direcaoSol.y, direcaoSol.z);
+   const c = new Color();
+   for (let i = 0; i < pos.count; i++) {
+-    const t = Math.max(0, Math.min(1, pos.getY(i) / 120));
+-    c.copy(horizonte).lerp(topo, Math.pow(t, 0.6));
++    const x = pos.getX(i) / 120;
++    const y = pos.getY(i) / 120;
++    const z = pos.getZ(i) / 120;
++    const t = Math.max(0, Math.min(1, y));
++    c.copy(horizonte).lerp(topo, Math.pow(t, 0.55));
++    const perto = Math.max(0, (x * direcaoSol.x + y * direcaoSol.y + z * direcaoSol.z) / len);
++    c.lerp(brilho, Math.pow(perto, 12) * 0.8);
+     cores.set([c.r, c.g, c.b], i * 3);
+   }
+   geo.setAttribute('color', new BufferAttribute(cores, 3));
+-  const ceu = new Mesh(geo, new MeshBasicMaterial({ vertexColors: true, side: BackSide, fog: false, depthWrite: false }));
++  const ceu = new Mesh(geo, new MeshBasicMaterial({ vertexColors: true, side: BackSide, fog: false, depthWrite: false, toneMapped: false }));
+   ceu.name = 'ceu';
+   ceu.renderOrder = -1;
+   return ceu;
+diff --git a/src/scenes/vista3d/detectorWebGL.ts b/src/scenes/vista3d/detectorWebGL.ts
+index 83e5d76..0cfb267 100644
+--- a/src/scenes/vista3d/detectorWebGL.ts
++++ b/src/scenes/vista3d/detectorWebGL.ts
+@@ -14,6 +14,25 @@ export function suportaWebGL(): boolean {
+   }
+ }
+ 
++/**
++ * O navegador está desenhando sem placa de vídeo (SwiftShader, llvmpipe, "Microsoft Basic
++ * Render Driver")? Nesse caso a cidade 3D roda a 1–3 FPS: melhor abrir direto no 2D, em vez
++ * de travar alguns segundos medindo o FPS. Acontece em servidores de teste (CI) e em PCs com
++ * a "aceleração gráfica" do Chrome desligada.
++ */
++export function renderizadorDeSoftware(): boolean {
++  try {
++    const gl = document.createElement('canvas').getContext('webgl');
++    if (!gl) return false;
++    const info = gl.getExtension('WEBGL_debug_renderer_info');
++    const nome = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
++    gl.getExtension('WEBGL_lose_context')?.loseContext();
++    return /swiftshader|llvmpipe|softpipe|software|basic render/i.test(nome);
++  } catch {
++    return false;
++  }
++}
++
+ /**
+  * Mede o FPS médio de uma janela de `janelaMs` ms, ignorando os primeiros `aquecimentoMs`
+  * (nos primeiros instantes o aparelho ainda está preparando a cena e o FPS é sempre baixo).
+diff --git a/src/scenes/vista3d/geometrias.ts b/src/scenes/vista3d/geometrias.ts
+index 39c2718..0499e25 100644
+--- a/src/scenes/vista3d/geometrias.ts
++++ b/src/scenes/vista3d/geometrias.ts
+@@ -1,5 +1,9 @@
+-// Geometrias low-poly geradas em código para a cena 3D do cruzamento.
+-// Nenhum arquivo .glb, .obj ou textura externa — tudo é Three.js puro.
++// Modelos 3D gerados em código para a cena do cruzamento.
++// Nenhum arquivo .glb, .obj ou imagem externa: as formas são do Three.js e as texturas
++// (asfalto, calçada, placas, letreiros) são desenhadas em canvas (ver texturas.ts).
++//
++// Para o celular continuar leve, peças do mesmo material são "fundidas" numa geometria só
++// (uma chamada de desenho) e os carros usam InstancedMesh.
+ 
+ import {
+   BoxGeometry,
+@@ -7,243 +11,361 @@ import {
+   Color,
+   CylinderGeometry,
+   Float32BufferAttribute,
++  type Material,
+   Mesh,
+   MeshBasicMaterial,
+   MeshLambertMaterial,
++  MeshStandardMaterial,
+   Object3D,
+-  InstancedMesh,
+-  Matrix4,
++  PlaneGeometry,
+   SphereGeometry,
+ } from 'three';
++import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
++import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+ 
+ import { criarCidade } from './cidade';
++import { texturaAsfalto, texturaCalcada, texturaGrama, texturaPlacaRua, texturaVelocidade } from './texturas';
+ 
+-// ──────────────────────────────────────── Cores base
+-const COR_ASFALTO   = new Color(0x3b3f45);
+-const COR_CALCADA   = new Color(0x5a6470);
+-const COR_GRAMA     = new Color(0x3d6b45);
+-const COR_FAIXA     = new Color(0xeeeeee);
+-const COR_FAIXA_AMB = new Color(0xff6b6b); // faixa vermelha da ambulância
+-
++/** Cores dos carros: parecidas com as da frota real (muito branco, prata, preto e cinza). */
+ export const CORES_CARRO = [
+-  0xef5350, 0x42a5f5, 0xffca28, 0x66bb6a,
+-  0xab47bc, 0xff7043, 0x26c6da, 0x8d6e63,
++  0xf4f4f2, 0xb9bec4, 0x23262b, 0xb71c1c, 0x1d4e89, 0x6e737a, 0xf4f4f2, 0xd8c7a0, 0x2e6b3a, 0xb9bec4,
+ ];
+ 
+ // ──────────────────────────────────────── helpers
+-function mat(color: Color | number): MeshLambertMaterial {
+-  return new MeshLambertMaterial({ color });
++
++/** Desloca (e opcionalmente gira) uma geometria e devolve ela mesma. */
++function em(g: BufferGeometry, x: number, y: number, z: number, rotZ = 0, rotY = 0): BufferGeometry {
++  if (rotZ) g.rotateZ(rotZ);
++  if (rotY) g.rotateY(rotY);
++  g.translate(x, y, z);
++  return g;
++}
++
++/** Garante os mesmos atributos (position, normal, uv) para poder fundir geometrias diferentes. */
++function fundir(lista: BufferGeometry[]): BufferGeometry {
++  const prontas = lista.map((g) => (g.index ? g.toNonIndexed() : g));
++  for (const g of prontas) {
++    if (!g.attributes.uv) g.setAttribute('uv', new Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
++  }
++  return mergeGeometries(prontas)!;
++}
++
++/**
++ * Caixa de chão (pista, calçada) com coordenadas de textura "do mundo": a mesma textura
++ * se repete sem esticar, qualquer que seja o tamanho da peça, e várias peças podem ser
++ * fundidas com uma textura só.
++ */
++function caixaChao(x0: number, x1: number, z0: number, z1: number, y0: number, y1: number, metrosPorRepeticao: number): BufferGeometry {
++  const g = new BoxGeometry(Math.abs(x1 - x0), y1 - y0, Math.abs(z1 - z0));
++  g.translate((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
++  const p = g.attributes.position;
++  const uv = g.attributes.uv;
++  for (let i = 0; i < p.count; i++) uv.setXY(i, p.getX(i) / metrosPorRepeticao, p.getZ(i) / metrosPorRepeticao);
++  return g;
+ }
+ 
+-function box(w: number, h: number, d: number, color: Color | number): Mesh {
+-  return new Mesh(new BoxGeometry(w, h, d), mat(color));
++/** Retângulo deitado no chão (pintura de pista). */
++function faixa(cx: number, cz: number, w: number, d: number, y: number): BufferGeometry {
++  const g = new PlaneGeometry(w, d);
++  g.rotateX(-Math.PI / 2);
++  g.translate(cx, y, cz);
++  return g;
++}
++
++function malha(geo: BufferGeometry, material: Material, sombra: 'projeta' | 'recebe' | 'ambos' | 'nenhuma'): Mesh {
++  const m = new Mesh(geo, material);
++  m.castShadow = sombra === 'projeta' || sombra === 'ambos';
++  m.receiveShadow = sombra === 'recebe' || sombra === 'ambos';
++  return m;
+ }
+ 
+ // ──────────────────────────────────────── Cenário
+-const MEIO = 1.3; // metade da largura da pista (em unidades 3D)
++const MEIO = 1.3; // metade da largura da pista
++/** Altura do asfalto (os carros andam aqui). */
++export const Y_ASFALTO = 0.1;
++/** Altura da calçada: um degrau de meio-fio acima do asfalto. */
++const Y_CALCADA = 0.14;
++/** Borda externa da calçada (as fachadas dos prédios começam um pouco antes). */
++const FIM_CALCADA = 3.3;
++const LONGE = 120;
+ 
+ /**
+- * Retorna o grupo raiz do cenário estático (chão, pistas, faixas, prédios, árvores).
++ * Retorna o grupo raiz do cenário estático (chão, pistas, calçadas, sinalização e cidade).
+  * Não inclui carros nem semáforos — esses são criados separadamente.
+  */
+ export function criarCenario(): Object3D {
+   const raiz = new Object3D();
+   raiz.name = 'cenario';
+ 
+-  // ── Chão base (grama) — grande para chegar ao horizonte na vista em primeira pessoa
+-  const chao = box(240, 0.1, 240, COR_GRAMA);
+-  chao.position.y = -0.05;
++  // ── Grama (terrenos atrás dos prédios, até o horizonte)
++  const grama = texturaGrama();
++  const chao = malha(caixaChao(-LONGE * 2, LONGE * 2, -LONGE * 2, LONGE * 2, -0.1, 0, 2), new MeshLambertMaterial({ map: grama }), 'recebe');
+   raiz.add(chao);
+ 
+-  // ── Pistas (Norte-Sul e Leste-Oeste)
+-  const pistaNS = box(MEIO * 2, 0.12, 240, COR_ASFALTO);
+-  raiz.add(pistaNS);
+-  const pistaLO = box(240, 0.12, MEIO * 2, COR_ASFALTO);
+-  raiz.add(pistaLO);
++  // ── Asfalto: rua Norte-Sul inteira + os dois braços da rua Leste-Oeste
++  const asfalto = fundir([
++    caixaChao(-MEIO, MEIO, -LONGE, LONGE, 0, Y_ASFALTO, 1.6),
++    caixaChao(MEIO, LONGE, -MEIO, MEIO, 0, Y_ASFALTO, 1.6),
++    caixaChao(-LONGE, -MEIO, -MEIO, MEIO, 0, Y_ASFALTO, 1.6),
++  ]);
++  raiz.add(malha(asfalto, new MeshLambertMaterial({ map: texturaAsfalto() }), 'recebe'));
+ 
+-  // ── Linha central tracejada nas duas ruas (uma InstancedMesh só)
+-  const posTracos: [number, number, boolean][] = [];
+-  for (let d = MEIO + 0.6; d < 60; d += 0.8) {
+-    for (const s of [-1, 1]) {
+-      posTracos.push([0, s * d, true]);
+-      posTracos.push([s * d, 0, false]);
++  // ── Calçadas nas quatro esquinas (em L) e o meio-fio claro na beira da pista
++  const pecasCalcada: BufferGeometry[] = [];
++  const pecasMeioFio: BufferGeometry[] = [];
++  for (const sx of [-1, 1]) {
++    for (const sz of [-1, 1]) {
++      // Ao longo da rua Norte-Sul (inclui o quadrado da esquina)
++      pecasCalcada.push(caixaChao(sx * MEIO, sx * FIM_CALCADA, sz * MEIO, sz * LONGE, 0, Y_CALCADA, 1));
++      // Ao longo da rua Leste-Oeste (começa depois do quadrado da esquina)
++      pecasCalcada.push(caixaChao(sx * FIM_CALCADA, sx * LONGE, sz * MEIO, sz * FIM_CALCADA, 0, Y_CALCADA, 1));
++      // Meio-fio: tira clara um pouco mais alta na beira da pista
++      pecasMeioFio.push(caixaChao(sx * MEIO, sx * (MEIO + 0.06), sz * MEIO, sz * LONGE, 0, Y_CALCADA + 0.008, 1));
++      pecasMeioFio.push(caixaChao(sx * (MEIO + 0.06), sx * LONGE, sz * MEIO, sz * (MEIO + 0.06), 0, Y_CALCADA + 0.008, 1));
+     }
+   }
+-  const tracos = new InstancedMesh(new BoxGeometry(0.06, 0.14, 0.4), mat(0xf2f2f2), posTracos.length);
+-  const m = new Matrix4();
+-  posTracos.forEach(([x, z, vertical], i) => {
+-    m.makeRotationY(vertical ? 0 : Math.PI / 2).setPosition(x, 0.04, z); // topo em 0,11: acima do asfalto (0,10)
+-    tracos.setMatrixAt(i, m);
+-  });
+-  raiz.add(tracos);
+-
+-  // ── Calçadas (com meio-fio um pouco mais alto que a pista)
+-  const calcadaLarg = 1.5;
+-  for (const s of [-1, 1]) {
+-    const ns = box(calcadaLarg, 0.12, 240, COR_CALCADA);
+-    ns.position.set(s * (MEIO + calcadaLarg / 2), 0.03, 0);
+-    raiz.add(ns);
+-    const lo = box(240, 0.12, calcadaLarg, COR_CALCADA);
+-    lo.position.set(0, 0.03, s * (MEIO + calcadaLarg / 2));
+-    raiz.add(lo);
+-  }
+-  // O asfalto do cruzamento fica por cima das calçadas que se cruzam no meio
+-  const cruzamento = box(MEIO * 2, 0.2, MEIO * 2, COR_ASFALTO);
+-  cruzamento.position.y = 0.0;
+-  raiz.add(cruzamento);
++  raiz.add(malha(fundir(pecasCalcada), new MeshLambertMaterial({ map: texturaCalcada() }), 'recebe'));
++  raiz.add(malha(fundir(pecasMeioFio), new MeshLambertMaterial({ color: 0xd9d6cf }), 'recebe'));
++
++  // ── Pintura da pista (uma geometria só)
++  const y = Y_ASFALTO + 0.002;
++  const pinturas: BufferGeometry[] = [];
++  const BORDA_LINHA = MEIO - 0.1;
+   for (const s of [-1, 1]) {
+-    const pn = box(MEIO * 2, 0.2, 200, COR_ASFALTO);
+-    pn.position.set(0, 0, s * 100 + s * MEIO);
+-    raiz.add(pn);
+-    const pl = box(200, 0.2, MEIO * 2, COR_ASFALTO);
+-    pl.position.set(s * 100 + s * MEIO, 0, 0);
+-    raiz.add(pl);
++    // Linhas de bordo contínuas, fora do cruzamento
++    pinturas.push(faixa(s * BORDA_LINHA, s * (MEIO + 2.4 + LONGE) / 2, 0.04, LONGE - MEIO - 2.4, y));
++    pinturas.push(faixa(-s * BORDA_LINHA, s * (MEIO + 2.4 + LONGE) / 2, 0.04, LONGE - MEIO - 2.4, y));
++    pinturas.push(faixa(s * (MEIO + 2.4 + LONGE) / 2, s * BORDA_LINHA, LONGE - MEIO - 2.4, 0.04, y));
++    pinturas.push(faixa(s * (MEIO + 2.4 + LONGE) / 2, -s * BORDA_LINHA, LONGE - MEIO - 2.4, 0.04, y));
+   }
+-
+-  // ── Faixas de pedestre (Norte-Sul e Leste-Oeste)
+-  const faixaY = 0.08;
+-  for (let i = -2; i <= 2; i++) {
+-    // faixa Norte
+-    const fn = box(0.18, faixaY, 0.7, COR_FAIXA);
+-    fn.position.set(MEIO * (i / 2) * 0.85, 0.075, -MEIO - 0.45);
+-    raiz.add(fn);
+-    // faixa Leste
+-    const fl = box(0.7, faixaY, 0.18, COR_FAIXA);
+-    fl.position.set(MEIO + 0.45, 0.075, MEIO * (i / 2) * 0.85);
+-    raiz.add(fl);
++  // Faixas de pedestre (zebradas) nos quatro lados do cruzamento
++  for (let x = -MEIO + 0.2; x <= MEIO - 0.15; x += 0.32) {
++    for (const s of [-1, 1]) {
++      pinturas.push(faixa(x + 0.08, s * (MEIO + 0.45), 0.16, 0.62, y));
++      pinturas.push(faixa(s * (MEIO + 0.45), x + 0.08, 0.62, 0.16, y));
++    }
+   }
++  // Linhas de retenção (onde a fila para) nas duas vias que chegam
++  pinturas.push(faixa(0, -MEIO - 1.1, MEIO * 2 - 0.1, 0.07, y));
++  pinturas.push(faixa(MEIO + 1.1, 0, 0.07, MEIO * 2 - 0.1, y));
++  const tinta = new MeshLambertMaterial({ color: 0xf2f2ee, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
++  raiz.add(malha(fundir(pinturas), tinta, 'recebe'));
+ 
+-  // ── Linha de retenção (para a fila)
+-  const lr1 = box(MEIO * 2, faixaY, 0.06, 0xffffff);
+-  lr1.position.set(0, 0.075, -MEIO - 1.1);
+-  raiz.add(lr1);
+-  const lr2 = box(0.06, faixaY, MEIO * 2, 0xffffff);
+-  lr2.position.set(MEIO + 1.1, 0.075, 0);
+-  raiz.add(lr2);
++  // ── Placas: nome das ruas (azul) e velocidade máxima
++  raiz.add(criarPlacas());
+ 
+-  // Prédios, árvores e postes ficam em cidade.ts (instanciados).
++  // Prédios, lojas, árvores e postes ficam em cidade.ts (instanciados).
+   raiz.add(criarCidade());
+ 
+   return raiz;
+ }
+ 
++const metalPoste = new MeshStandardMaterial({ color: 0x5f656c, roughness: 0.5, metalness: 0.6 });
++
++function criarPlacas(): Object3D {
++  const g = new Object3D();
++  // Placa de rua na esquina nordeste (em frente ao guarda), com as duas ruas.
++  const haste = malha(new CylinderGeometry(0.02, 0.02, 1.15, 8), metalPoste, 'projeta');
++  haste.position.set(MEIO + 0.35, Y_CALCADA + 0.575, -MEIO - 0.35);
++  g.add(haste);
++  // Cada placa tem duas faces (uma de cada lado), para o texto nunca aparecer espelhado.
++  const placa = (texto: string, y: number, rotY: number): Object3D => {
++    const p = new Object3D();
++    const mat = new MeshStandardMaterial({ map: texturaPlacaRua(texto), roughness: 0.4 });
++    const frente = new Mesh(new PlaneGeometry(0.62, 0.155), mat);
++    frente.position.z = 0.004;
++    const verso = new Mesh(frente.geometry, mat);
++    verso.rotation.y = Math.PI;
++    verso.position.z = -0.004;
++    const chapa = malha(new BoxGeometry(0.63, 0.16, 0.006), metalPoste, 'projeta');
++    p.add(frente, verso, chapa);
++    p.position.set(MEIO + 0.35, Y_CALCADA + y, -MEIO - 0.35);
++    p.rotation.y = rotY;
++    return p;
++  };
++  g.add(placa('AV. NORTE–SUL', 1.08, Math.PI / 2), placa('R. LESTE–OESTE', 0.92, 0));
++
++  // Velocidade máxima 40 km/h nas duas vias que chegam (antes do cruzamento)
++  const vel = new MeshStandardMaterial({ map: texturaVelocidade(40), roughness: 0.4, transparent: true, alphaTest: 0.5 });
++  const discoVel = new PlaneGeometry(0.26, 0.26);
++  const pontos: [number, number, number][] = [
++    [MEIO + 0.3, -MEIO - 6.5, 0], // via Norte, olhando para quem vem do norte
++    [MEIO + 6.5, -MEIO - 0.3, -Math.PI / 2], // via Leste
++  ];
++  for (const [x, z, rot] of pontos) {
++    const p = malha(new CylinderGeometry(0.018, 0.018, 0.9, 8), metalPoste, 'projeta');
++    p.position.set(x, Y_CALCADA + 0.45, z);
++    const d = new Mesh(discoVel, vel);
++    d.position.set(x, Y_CALCADA + 0.85, z);
++    d.rotation.y = Math.PI + rot;
++    d.castShadow = true;
++    g.add(p, d);
++  }
++  return g;
++}
++
+ // ──────────────────────────────────────── Semáforo
+-export function criarSemaforo(): Object3D {
++
++export interface Semaforo {
++  grupo: Object3D;
++  /** Materiais das luzes (compartilhados pela frente e pelo verso da caixa). */
++  luzes: { vermelho: MeshBasicMaterial; amarelo: MeshBasicMaterial; verde: MeshBasicMaterial };
++}
++
++export const COR_LUZ = {
++  vermelho: { acesa: 0xff2a1a, apagada: 0x3a1210 },
++  amarelo: { acesa: 0xffb300, apagada: 0x3a2c0c },
++  verde: { acesa: 0x2bff6a, apagada: 0x0f3018 },
++} as const;
++
++export function criarSemaforo(): Semaforo {
+   const grupo = new Object3D();
+-  // poste
+-  const poste = new Mesh(
+-    new CylinderGeometry(0.06, 0.06, 1.4, 6),
+-    mat(0x888888),
+-  );
+-  poste.position.y = 0.7;
++  const poste = malha(new CylinderGeometry(0.035, 0.045, 1.45, 10), metalPoste, 'projeta');
++  poste.position.y = 0.725;
+   grupo.add(poste);
+-  // caixa do semáforo
+-  const caixa = box(0.22, 0.5, 0.18, 0x222222);
+-  caixa.position.y = 1.55;
+-  grupo.add(caixa);
+-  // lâmpada (sphere pequena)
+-  // Lâmpada com material "básico": brilha igual de dia, sem depender da luz da cena.
+-  const lamp = new Mesh(new SphereGeometry(0.1, 10, 8), new MeshBasicMaterial({ color: 0xff3030 }));
+-  lamp.name = 'lampada';
+-  lamp.position.y = 1.55;
+-  lamp.position.z = 0.11;
+-  grupo.add(lamp);
+-  // Mesma luz na parte de trás (mesmo material: muda de cor junto), para o guarda
+-  // na esquina enxergar o sinal das duas vias.
+-  const lampTras = new Mesh(lamp.geometry, lamp.material);
+-  lampTras.position.set(0, 1.55, -0.11);
+-  grupo.add(lampTras);
+-  return grupo;
+-}
+ 
+-// ──────────────────────────────────────── Carro (geometria base para InstancedMesh)
+-/** Geometria de um carro visto de perspectiva inclinada — low-poly box + para-brisa. */
+-export function gerarGeometriaCarro(): BufferGeometry {
+-  // carroceria principal
+-  const geo = new BoxGeometry(0.55, 0.22, 0.95);
+-  // Levanta ligeiramente para ficar acima do chão
+-  const pos = geo.attributes.position as Float32BufferAttribute;
+-  for (let i = 0; i < pos.count; i++) {
+-    pos.setY(i, pos.getY(i) + 0.11);
++  // Caixa preta com bordas arredondadas e "bonés" sobre cada luz
++  const preto = new MeshStandardMaterial({ color: 0x15171a, roughness: 0.55, metalness: 0.2 });
++  const caixa = malha(new RoundedBoxGeometry(0.22, 0.58, 0.16, 2, 0.03), preto, 'projeta');
++  caixa.position.y = 1.62;
++  grupo.add(caixa);
++  const bones: BufferGeometry[] = [];
++  const luzes = {
++    vermelho: new MeshBasicMaterial({ color: COR_LUZ.vermelho.acesa }),
++    amarelo: new MeshBasicMaterial({ color: COR_LUZ.amarelo.apagada }),
++    verde: new MeshBasicMaterial({ color: COR_LUZ.verde.apagada }),
++  };
++  const bola = new SphereGeometry(0.058, 16, 10);
++  const alturas: [keyof typeof luzes, number][] = [['vermelho', 1.79], ['amarelo', 1.62], ['verde', 1.45]];
++  for (const [cor, yy] of alturas) {
++    for (const lado of [1, -1]) {
++      const l = new Mesh(bola, luzes[cor]);
++      l.position.set(0, yy, lado * 0.07);
++      l.scale.z = 0.5;
++      grupo.add(l);
++      bones.push(em(new BoxGeometry(0.16, 0.012, 0.07), 0, yy + 0.07, lado * 0.115));
++    }
+   }
+-  pos.needsUpdate = true;
+-  return geo;
++  grupo.add(malha(fundir(bones), preto, 'projeta'));
++  // Placa de fundo (preta com borda amarela, como nos semáforos brasileiros)
++  const fundo = malha(new BoxGeometry(0.32, 0.68, 0.01), new MeshLambertMaterial({ color: 0xf2c200 }), 'projeta');
++  fundo.position.set(0, 1.62, 0);
++  grupo.add(fundo);
++  return { grupo, luzes };
+ }
+ 
+-/** Junta várias caixas pequenas numa geometria só (para faróis e lanternas instanciados). */
+-function caixas(lista: [number, number, number, number, number, number][]): BufferGeometry {
+-  const pos: number[] = [];
+-  const idx: number[] = [];
+-  for (const [cx, cy, cz, w, h, d] of lista) {
+-    const g = new BoxGeometry(w, h, d);
+-    const p = g.attributes.position as Float32BufferAttribute;
+-    const base = pos.length / 3;
+-    for (let i = 0; i < p.count; i++) pos.push(p.getX(i) + cx, p.getY(i) + cy, p.getZ(i) + cz);
+-    for (const i of g.index!.array) idx.push(base + i);
+-    g.dispose();
+-  }
+-  const geo = new BufferGeometry();
+-  geo.setAttribute('position', new Float32BufferAttribute(pos, 3));
+-  geo.setIndex(idx);
+-  geo.computeVertexNormals();
+-  return geo;
+-}
++// ──────────────────────────────────────── Carro (geometrias para InstancedMesh)
++// Frente do carro em +z. Comprimento 0,95, largura 0,55 (≈ 4,2 m × 1,8 m na escala do jogo).
+ 
+-/** Faróis: dois retângulos claros na frente do carro (+z). */
+-export function gerarGeometriaFarois(): BufferGeometry {
+-  return caixas([
+-    [-0.18, 0.17, 0.48, 0.12, 0.06, 0.02],
+-    [0.18, 0.17, 0.48, 0.12, 0.06, 0.02],
+-  ]);
++export interface PecasCarro {
++  /** Lataria (recebe a cor de cada carro). */
++  pintura: BufferGeometry;
++  vidro: BufferGeometry;
++  /** Pneus, para-choques e grade. */
++  escuro: BufferGeometry;
++  /** Calotas e maçanetas. */
++  cromado: BufferGeometry;
++  farois: BufferGeometry;
++  lanternas: BufferGeometry;
+ }
+ 
+-/** Lanternas traseiras (−z): a cor de cada instância muda para "freio" quando o carro está parado. */
+-export function gerarGeometriaLanternas(): BufferGeometry {
+-  return caixas([
+-    [-0.19, 0.18, -0.48, 0.12, 0.06, 0.02],
+-    [0.19, 0.18, -0.48, 0.12, 0.06, 0.02],
+-  ]);
++/** Cabine de vidro com o teto mais estreito que a base (para-brisa e vigia inclinados). */
++function cabine(): BufferGeometry {
++  const g = new BoxGeometry(0.47, 0.15, 0.52);
++  const p = g.attributes.position;
++  for (let i = 0; i < p.count; i++) {
++    if (p.getY(i) > 0) {
++      p.setX(i, p.getX(i) * 0.86);
++      p.setZ(i, p.getZ(i) * 0.7 - 0.02);
++    }
++  }
++  g.computeVertexNormals();
++  return em(g, 0, 0.305, -0.04);
+ }
+ 
+-/** Geometria do teto/cabine do carro. */
+-export function gerarGeometriaTeto(): BufferGeometry {
+-  const geo = new BoxGeometry(0.42, 0.18, 0.48);
+-  const pos = geo.attributes.position as Float32BufferAttribute;
+-  for (let i = 0; i < pos.count; i++) {
+-    pos.setY(i, pos.getY(i) + 0.33);
++export function gerarPecasCarro(): PecasCarro {
++  const rodas: BufferGeometry[] = [];
++  const calotas: BufferGeometry[] = [];
++  for (const x of [-0.245, 0.245]) {
++    for (const z of [-0.31, 0.31]) {
++      rodas.push(em(new CylinderGeometry(0.088, 0.088, 0.075, 12), x, 0.088, z, Math.PI / 2));
++      calotas.push(em(new CylinderGeometry(0.05, 0.05, 0.08, 8), x, 0.088, z, Math.PI / 2));
++    }
+   }
+-  pos.needsUpdate = true;
+-  return geo;
++  return {
++    pintura: fundir([
++      em(new RoundedBoxGeometry(0.55, 0.165, 0.95, 2, 0.055), 0, 0.152, 0),
++      em(new RoundedBoxGeometry(0.4, 0.035, 0.37, 2, 0.015), 0, 0.392, -0.056),
++      // Retrovisores
++      em(new BoxGeometry(0.05, 0.035, 0.05), -0.29, 0.255, 0.13),
++      em(new BoxGeometry(0.05, 0.035, 0.05), 0.29, 0.255, 0.13),
++    ]),
++    vidro: fundir([cabine()]),
++    escuro: fundir([
++      ...rodas,
++      em(new BoxGeometry(0.565, 0.055, 0.06), 0, 0.1, 0.465),
++      em(new BoxGeometry(0.565, 0.055, 0.06), 0, 0.1, -0.465),
++      em(new BoxGeometry(0.26, 0.04, 0.012), 0, 0.17, 0.476),
++    ]),
++    cromado: fundir([
++      ...calotas,
++      // Maçanetas
++      ...[-0.278, 0.278].flatMap((x) => [em(new BoxGeometry(0.008, 0.012, 0.04), x, 0.2, 0.06), em(new BoxGeometry(0.008, 0.012, 0.04), x, 0.2, -0.14)]),
++    ]),
++    farois: fundir([
++      em(new BoxGeometry(0.11, 0.045, 0.012), -0.19, 0.175, 0.474),
++      em(new BoxGeometry(0.11, 0.045, 0.012), 0.19, 0.175, 0.474),
++      // Placas (brancas, padrão Mercosul) na frente e atrás
++      em(new BoxGeometry(0.14, 0.04, 0.006), 0, 0.1, 0.497),
++      em(new BoxGeometry(0.14, 0.04, 0.006), 0, 0.1, -0.497),
++    ]),
++    lanternas: fundir([
++      em(new BoxGeometry(0.12, 0.05, 0.012), -0.19, 0.18, -0.474),
++      em(new BoxGeometry(0.12, 0.05, 0.012), 0.19, 0.18, -0.474),
++    ]),
++  };
+ }
+ 
+ // ──────────────────────────────────────── Ambulância (mesh individual)
+ export function criarMeshAmbulancia(vertical: boolean): Object3D {
+   const grupo = new Object3D();
+-  // carroceria branca
+-  const corpo = new Mesh(new BoxGeometry(0.58, 0.28, 1.1), mat(0xffffff));
+-  corpo.position.y = 0.14;
+-  grupo.add(corpo);
+-  // faixa vermelha
+-  const faixa = new Mesh(new BoxGeometry(0.59, 0.09, 1.11), mat(COR_FAIXA_AMB));
+-  faixa.position.y = 0.14;
+-  grupo.add(faixa);
+-  // teto elevado
+-  const teto = new Mesh(new BoxGeometry(0.5, 0.22, 0.9), mat(0xf5f5f5));
+-  teto.position.y = 0.41;
+-  grupo.add(teto);
+-  // luz giratória (Mesh vermelho/azul alternado pelo código da cena)
+-  const luz = new Mesh(new BoxGeometry(0.22, 0.1, 0.22), mat(0xff1744));
++  const branco = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.35, metalness: 0.1 });
++  const vermelho = new MeshStandardMaterial({ color: 0xd50000, roughness: 0.4 });
++  const escuro = new MeshLambertMaterial({ color: 0x18191b });
++  const vidro = new MeshStandardMaterial({ color: 0x0f1a24, roughness: 0.08, metalness: 0.8 });
++
++  // Furgão: baú alto atrás, cabine com para-brisa na frente
++  const bau = malha(new RoundedBoxGeometry(0.6, 0.46, 0.78, 3, 0.04), branco, 'ambos');
++  bau.position.set(0, 0.32, -0.15);
++  const capo = malha(new RoundedBoxGeometry(0.6, 0.24, 0.38, 3, 0.05), branco, 'ambos');
++  capo.position.set(0, 0.2, 0.42);
++  const parabrisa = new Mesh(new BoxGeometry(0.54, 0.16, 0.02), vidro);
++  parabrisa.position.set(0, 0.42, 0.26);
++  parabrisa.rotation.x = -0.35;
++  const cabineAlta = malha(new RoundedBoxGeometry(0.6, 0.2, 0.2, 2, 0.03), branco, 'ambos');
++  cabineAlta.position.set(0, 0.44, 0.16);
++  const faixa = new Mesh(new BoxGeometry(0.61, 0.07, 1.12), vermelho);
++  faixa.position.set(0, 0.22, 0.02);
++  grupo.add(bau, capo, parabrisa, cabineAlta, faixa);
++
++  const rodas: BufferGeometry[] = [];
++  for (const x of [-0.26, 0.26]) for (const z of [-0.36, 0.38]) rodas.push(em(new CylinderGeometry(0.095, 0.095, 0.08, 14), x, 0.095, z, Math.PI / 2));
++  grupo.add(malha(fundir(rodas), escuro, 'projeta'));
++
++  // Giroflex vermelho/azul (a cor alterna no código da cena)
++  const luz = new Mesh(new BoxGeometry(0.3, 0.06, 0.1), new MeshBasicMaterial({ color: 0xff1744 }));
+   luz.name = 'luz';
+-  luz.position.y = 0.56;
++  luz.position.set(0, 0.575, 0.16);
+   grupo.add(luz);
+-  // cruz vermelha no teto
+-  const hCruz = new Mesh(new BoxGeometry(0.28, 0.01, 0.08), mat(0xcc0000));
+-  hCruz.position.set(0, 0.53, 0);
+-  grupo.add(hCruz);
+-  const vCruz = new Mesh(new BoxGeometry(0.08, 0.01, 0.28), mat(0xcc0000));
+-  vCruz.position.set(0, 0.53, 0);
+-  grupo.add(vCruz);
+-  // rotação para a via
+-  if (!vertical) grupo.rotation.y = Math.PI / 2;
++  // Cruz vermelha no teto
++  const cruz = new Mesh(fundir([new BoxGeometry(0.28, 0.01, 0.08), new BoxGeometry(0.08, 0.01, 0.28)]), vermelho);
++  cruz.position.set(0, 0.555, -0.2);
++  grupo.add(cruz);
++  if (!vertical) grupo.rotation.y = -Math.PI / 2;
+   return grupo;
+ }
++
++/** Cor do carro (instância). */
++export function corDoCarro(id: number): Color {
++  return new Color(CORES_CARRO[id % CORES_CARRO.length]);
++}
+diff --git a/src/scenes/vista3d/texturas.ts b/src/scenes/vista3d/texturas.ts
+new file mode 100644
+index 0000000..cc1eb22
+--- /dev/null
++++ b/src/scenes/vista3d/texturas.ts
+@@ -0,0 +1,192 @@
++// Texturas geradas em código (canvas 2D) para a vista 3D.
++// Nada é baixado: o asfalto, a calçada, a grama, as placas de rua e os letreiros das lojas
++// são desenhados na hora em que a cena abre. Mantém o jogo 100% offline e sem licenças
++// de terceiros.
++
++import { CanvasTexture, RepeatWrapping, SRGBColorSpace, type Texture } from 'three';
++
++/** Gerador pseudoaleatório com semente (a textura sai sempre igual). */
++function rng(semente: number): () => number {
++  let s = semente >>> 0;
++  return () => {
++    s = (s * 1664525 + 1013904223) >>> 0;
++    return s / 4294967296;
++  };
++}
++
++function novoCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
++  const c = document.createElement('canvas');
++  c.width = w;
++  c.height = h;
++  return [c, c.getContext('2d')!];
++}
++
++function finalizar(c: HTMLCanvasElement, repetir = true): CanvasTexture {
++  const t = new CanvasTexture(c);
++  t.colorSpace = SRGBColorSpace;
++  t.anisotropy = 4;
++  if (repetir) t.wrapS = t.wrapT = RepeatWrapping;
++  return t;
++}
++
++/** Granulado: muitos pontinhos claros e escuros sobre uma cor base. */
++function granular(g: CanvasRenderingContext2D, w: number, h: number, base: string, qtd: number, forca: number, r: () => number): void {
++  g.fillStyle = base;
++  g.fillRect(0, 0, w, h);
++  for (let i = 0; i < qtd; i++) {
++    const claro = r() < 0.5;
++    g.fillStyle = claro ? `rgba(255,255,255,${r() * forca})` : `rgba(0,0,0,${r() * forca})`;
++    const s = 1 + r() * 2;
++    g.fillRect(r() * w, r() * h, s, s);
++  }
++}
++
++const cache = new Map<string, Texture>();
++function memo(chave: string, criar: () => Texture): Texture {
++  let t = cache.get(chave);
++  if (!t) {
++    t = criar();
++    cache.set(chave, t);
++  }
++  return t;
++}
++
++/** Asfalto: cinza escuro granulado, com manchas de óleo e remendos. */
++export function texturaAsfalto(): Texture {
++  return memo('asfalto', () => {
++    const [c, g] = novoCanvas(256, 256);
++    const r = rng(11);
++    granular(g, 256, 256, '#45484d', 7000, 0.12, r);
++    for (let i = 0; i < 6; i++) {
++      g.fillStyle = `rgba(20,20,24,${0.08 + r() * 0.1})`;
++      g.beginPath();
++      g.ellipse(r() * 256, r() * 256, 10 + r() * 30, 6 + r() * 16, r() * Math.PI, 0, Math.PI * 2);
++      g.fill();
++    }
++    // Rachaduras finas
++    g.strokeStyle = 'rgba(25,25,28,0.5)';
++    g.lineWidth = 1;
++    for (let i = 0; i < 4; i++) {
++      let x = r() * 256;
++      let y = r() * 256;
++      g.beginPath();
++      g.moveTo(x, y);
++      for (let k = 0; k < 6; k++) {
++        x += (r() - 0.5) * 30;
++        y += (r() - 0.5) * 30;
++        g.lineTo(x, y);
++      }
++      g.stroke();
++    }
++    return finalizar(c);
++  });
++}
++
++/** Calçada: lajotas de concreto 4 × 4 com rejunte. */
++export function texturaCalcada(): Texture {
++  return memo('calcada', () => {
++    const [c, g] = novoCanvas(256, 256);
++    const r = rng(23);
++    granular(g, 256, 256, '#b9b4ab', 5000, 0.12, r);
++    for (let i = 0; i < 4; i++) {
++      for (let j = 0; j < 4; j++) {
++        const v = Math.floor((r() - 0.5) * 18);
++        g.fillStyle = v > 0 ? `rgba(255,255,255,${v / 120})` : `rgba(0,0,0,${-v / 120})`;
++        g.fillRect(i * 64, j * 64, 64, 64);
++      }
++    }
++    g.strokeStyle = 'rgba(70,66,60,0.55)';
++    g.lineWidth = 2;
++    for (let i = 0; i <= 4; i++) {
++      g.beginPath();
++      g.moveTo(i * 64, 0);
++      g.lineTo(i * 64, 256);
++      g.moveTo(0, i * 64);
++      g.lineTo(256, i * 64);
++      g.stroke();
++    }
++    return finalizar(c);
++  });
++}
++
++/** Grama: verde com variação de tom. */
++export function texturaGrama(): Texture {
++  return memo('grama', () => {
++    const [c, g] = novoCanvas(128, 128);
++    const r = rng(5);
++    granular(g, 128, 128, '#5b8a3c', 4000, 0.25, r);
++    return finalizar(c);
++  });
++}
++
++/** Placa azul de nome de rua, no padrão brasileiro (texto branco, borda branca). */
++export function texturaPlacaRua(texto: string): Texture {
++  return memo(`placa:${texto}`, () => {
++    const [c, g] = novoCanvas(512, 128);
++    g.fillStyle = '#1f4fa3';
++    g.fillRect(0, 0, 512, 128);
++    g.strokeStyle = '#ffffff';
++    g.lineWidth = 8;
++    g.strokeRect(10, 10, 492, 108);
++    g.fillStyle = '#ffffff';
++    g.font = 'bold 58px Arial, Helvetica, sans-serif';
++    g.textAlign = 'center';
++    g.textBaseline = 'middle';
++    g.fillText(texto, 256, 68, 470);
++    return finalizar(c, false);
++  });
++}
++
++/** Placa de velocidade máxima (círculo vermelho, número preto). */
++export function texturaVelocidade(kmh: number): Texture {
++  return memo(`vel:${kmh}`, () => {
++    const [c, g] = novoCanvas(128, 128);
++    g.fillStyle = '#ffffff';
++    g.beginPath();
++    g.arc(64, 64, 62, 0, Math.PI * 2);
++    g.fill();
++    g.strokeStyle = '#d32f2f';
++    g.lineWidth = 14;
++    g.beginPath();
++    g.arc(64, 64, 54, 0, Math.PI * 2);
++    g.stroke();
++    g.fillStyle = '#111';
++    g.font = 'bold 50px Arial, Helvetica, sans-serif';
++    g.textAlign = 'center';
++    g.textBaseline = 'middle';
++    g.fillText(String(kmh), 64, 68);
++    return finalizar(c, false);
++  });
++}
++
++/** Letreiros das lojas: todos numa só imagem (uma faixa por loja), para desenhar em 1 chamada. */
++export const LOJAS: { nome: string; fundo: string; letra: string }[] = [
++  { nome: 'MERCADO', fundo: '#d32f2f', letra: '#ffffff' },
++  { nome: 'PADARIA', fundo: '#8d5524', letra: '#ffe9c4' },
++  { nome: 'FARMÁCIA', fundo: '#ffffff', letra: '#1b8a3a' },
++  { nome: 'LANCHES', fundo: '#ffb300', letra: '#5a2600' },
++  { nome: 'BANCO', fundo: '#0d47a1', letra: '#ffffff' },
++  { nome: 'ÓTICA', fundo: '#212121', letra: '#ffd54f' },
++  { nome: 'PET SHOP', fundo: '#00897b', letra: '#ffffff' },
++  { nome: 'PAPELARIA', fundo: '#6a1b9a', letra: '#ffffff' },
++];
++
++export function texturaLetreiros(): Texture {
++  return memo('letreiros', () => {
++    const alturaFaixa = 64;
++    const [c, g] = novoCanvas(512, alturaFaixa * LOJAS.length);
++    LOJAS.forEach((l, i) => {
++      const y = i * alturaFaixa;
++      g.fillStyle = l.fundo;
++      g.fillRect(0, y, 512, alturaFaixa);
++      g.fillStyle = 'rgba(0,0,0,0.18)';
++      g.fillRect(0, y + alturaFaixa - 6, 512, 6);
++      g.fillStyle = l.letra;
++      g.font = 'bold 42px Arial, Helvetica, sans-serif';
++      g.textAlign = 'center';
++      g.textBaseline = 'middle';
++      g.fillText(l.nome, 256, y + alturaFaixa / 2 + 2, 480);
++    });
++    return finalizar(c, false);
++  });
++}
