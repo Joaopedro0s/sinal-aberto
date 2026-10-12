@@ -17,6 +17,7 @@ import { Mesa, testidDoBloco } from '../ui/mesa';
 import type { AcoesPainel, EstadoPainel, PainelFase } from '../ui/painelFase';
 import { Tutorial } from '../ui/tutorial';
 import { LARGURA, VistaCruzamento } from './vistaCruzamento';
+import { ambienteDaFase } from './vista3d/ambiente';
 import { Vista3D } from './vista3d/Vista3D';
 import { MonitorFPS, lembrarQualidade3D, qualidade3D } from './vista3d/detectorWebGL';
 
@@ -348,7 +349,10 @@ export class CruzamentoScene extends Phaser.Scene {
 
   private ativar3D(): void {
     const ctx = contexto();
-    this.vista3D = new Vista3D(ctx.palco);
+    // `?ambiente=noite` (dia, entardecer, chuva, noite) troca o visual de qualquer fase: útil para prints.
+    const pedido = new URLSearchParams(location.search).get('ambiente');
+    const ambiente = (['dia', 'entardecer', 'chuva', 'noite'] as const).find((a) => a === pedido) ?? ambienteDaFase(this.fase);
+    this.vista3D = new Vista3D(ctx.palco, { ambiente });
     // Torna o canvas do Phaser transparente e invisível à interação
     this.game.canvas.style.opacity = '0';
     this.game.canvas.style.pointerEvents = 'none';

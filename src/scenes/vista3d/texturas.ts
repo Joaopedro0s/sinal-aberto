@@ -190,3 +190,17 @@ export function texturaLetreiros(): Texture {
     return finalizar(c, false);
   });
 }
+
+/** Mancha de luz suave (círculo com degradê): fachos dos faróis, luz dos postes e brilho dos semáforos. */
+export function texturaMancha(): Texture {
+  return memo('mancha', () => {
+    const [c, g] = novoCanvas(128, 128);
+    const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    grad.addColorStop(0, 'rgba(255,255,255,1)');
+    grad.addColorStop(0.35, 'rgba(255,255,255,0.5)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 128, 128);
+    return finalizar(c, false);
+  });
+}
