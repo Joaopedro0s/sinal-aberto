@@ -16,13 +16,15 @@ import { SelecaoFasesScene } from './scenes/SelecaoFasesScene';
 import { registrarServiceWorker } from './sw/registrar';
 import { ligarHookDeTeste } from './testeHook';
 import { el } from './ui/dom';
-import { suportaWebGL } from './scenes/vista3d/detectorWebGL';
+import { renderizadorDeSoftware, suportaWebGL } from './scenes/vista3d/detectorWebGL';
 
 const parametros = new URLSearchParams(window.location.search);
 const modoTeste = parametros.get('teste') === '1';
 if (modoTeste) ligarHookDeTeste();
 // Ativa o renderizador 3D se WebGL estiver disponível (desativado com ?modo2d=1).
-const modo3D = suportaWebGL() && parametros.get('modo2d') !== '1';
+// Sem placa de vídeo (desenho por software) abre direto no 2D; `?3d=sempre` força o 3D.
+const modo3D =
+  suportaWebGL() && parametros.get('modo2d') !== '1' && (parametros.get('3d') === 'sempre' || !renderizadorDeSoftware());
 
 const app = document.getElementById('app') as HTMLElement;
 const palco = el('div', { id: 'palco', role: 'img', rotulo: 'Cruzamento visto de cima com os carros e os semáforos' });

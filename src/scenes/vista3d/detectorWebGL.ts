@@ -15,6 +15,25 @@ export function suportaWebGL(): boolean {
 }
 
 /**
+ * O navegador está desenhando sem placa de vídeo (SwiftShader, llvmpipe, "Microsoft Basic
+ * Render Driver")? Nesse caso a cidade 3D roda a 1–3 FPS: melhor abrir direto no 2D, em vez
+ * de travar alguns segundos medindo o FPS. Acontece em servidores de teste (CI) e em PCs com
+ * a "aceleração gráfica" do Chrome desligada.
+ */
+export function renderizadorDeSoftware(): boolean {
+  try {
+    const gl = document.createElement('canvas').getContext('webgl');
+    if (!gl) return false;
+    const info = gl.getExtension('WEBGL_debug_renderer_info');
+    const nome = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    return /swiftshader|llvmpipe|softpipe|software|basic render/i.test(nome);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Mede o FPS médio de uma janela de `janelaMs` ms, ignorando os primeiros `aquecimentoMs`
  * (nos primeiros instantes o aparelho ainda está preparando a cena e o FPS é sempre baixo).
  * No fim chama `aoMedir(fps)`; quem usa decide o que fazer com o valor.
