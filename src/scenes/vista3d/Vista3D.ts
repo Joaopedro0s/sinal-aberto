@@ -160,12 +160,18 @@ export class Vista3D {
 
   private quadro = 0;
   private destruida = false;
+  /** Modo econômico ligado pelo monitor de FPS (resolução 1×, sem nevoeiro). */
+  private economico = false;
   private observador: ResizeObserver | null = null;
   private readonly aoTeclar = (e: KeyboardEvent): void => this.teclado(e);
 
   constructor(private readonly elementoPai: HTMLElement) {
-    this.renderer = new WebGLRenderer({ antialias: true, alpha: false });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    // Celular: telas de alta densidade já ficam nítidas a 1,5× e quase não precisam de
+    // antialiasing; isso reduz bastante o trabalho da placa de vídeo do aparelho.
+    const telaPequena = Math.min(window.innerWidth, window.innerHeight) < 820;
+    const dpr = window.devicePixelRatio || 1;
+    this.renderer = new WebGLRenderer({ antialias: !(telaPequena && dpr >= 2), alpha: false, powerPreference: 'high-performance' });
+    this.renderer.setPixelRatio(Math.min(dpr, telaPequena ? 1.5 : 2));
     this.renderer.shadowMap.enabled = false; // performance em celular de entrada
 
     this.canvas = this.renderer.domElement;
@@ -290,6 +296,17 @@ export class Vista3D {
     else this.pitch = Math.min(LIMITE_PITCH, this.pitch + 0.18);
   }
 
+  /**
+   * Modo econômico, usado quando o aparelho não aguenta: resolução 1× e sem nevoeiro.
+   * O jogo continua em 3D; só fica um pouco menos nítido.
+   */
+  reduzirQualidade(): void {
+    this.economico = true;
+    this.renderer.setPixelRatio(1);
+    this.ajustarTamanho();
+    this.scene.fog = null;
+  }
+
   destruir(): void {
     this.destruida = true;
     if (this.quadro !== 0) cancelAnimationFrame(this.quadro);
@@ -314,7 +331,7 @@ export class Vista3D {
     this.btnVista.textContent = primeira ? 'Vista de cima' : '1ª pessoa';
     this.btnVista.setAttribute('aria-label', primeira ? 'Trocar para a vista de cima' : 'Trocar para a vista em primeira pessoa');
     // Nevoeiro só em primeira pessoa: esconde o fim da cidade no horizonte.
-    this.scene.fog = primeira ? new Fog(COR_HORIZONTE, 14, 70) : null;
+    this.scene.fog = primeira && !this.economico ? new Fog(COR_HORIZONTE, 14, 70) : null;
     const predios = this.scene.getObjectByName('predios');
     if (predios) predios.scale.y = primeira ? 1 : 0.3;
     this.yaw = YAW_INICIAL;

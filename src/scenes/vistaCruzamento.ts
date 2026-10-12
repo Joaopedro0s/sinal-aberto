@@ -113,10 +113,20 @@ export class VistaCruzamento {
   private sincronizar(k: number): void {
     const sim = this.sim!;
     const vistos = new Set<number>();
+    // Em cada via, do carro mais à frente para o de trás: cada um respeita a distância do
+    // carro da frente (antes o 1º da fila "escorregava" para a faixa em cima de quem acabou
+    // de começar a atravessar).
     for (const via of VIAS) {
-      sim.fila(via).forEach((c, i) => this.moverCarro(c, i, k, vistos));
+      const cruzando = sim
+        .carros()
+        .filter((c) => c.estado === 'cruzando' && c.via === via)
+        .sort((a, b) => b.progresso - a.progresso);
+      let frente: number | null = null;
+      for (const c of cruzando) frente = this.moverCarro(c, 0, k, vistos, frente);
+      sim.fila(via).forEach((c, i) => {
+        frente = this.moverCarro(c, i, k, vistos, frente);
+      });
     }
-    for (const c of sim.carros()) if (c.estado === 'cruzando') this.moverCarro(c, 0, k, vistos);
 
     for (const [id, v] of this.carros) {
       if (vistos.has(id)) continue;
@@ -134,7 +144,11 @@ export class VistaCruzamento {
     }
   }
 
-  private moverCarro(c: Carro, indice: number, k: number, vistos: Set<number>): void {
+  /**
+   * Move o carro em direção ao alvo e devolve a posição dele "ao longo da via" (maior = mais
+   * à frente), para o carro de trás não encostar. `frente` é essa posição do carro da frente.
+   */
+  private moverCarro(c: Carro, indice: number, k: number, vistos: Set<number>, frente: number | null = null): number {
     vistos.add(c.id);
     const alvo = posicao(c, indice);
     let v = this.carros.get(c.id);
@@ -145,10 +159,17 @@ export class VistaCruzamento {
     }
     v.objeto.x += (alvo.x - v.objeto.x) * k;
     v.objeto.y += (alvo.y - v.objeto.y) * k;
+    const distancia = COMPRIMENTO + 6;
+    if (frente !== null) {
+      // Norte anda para baixo (+y); Leste anda para a esquerda (−x).
+      if (c.via === 'Norte') v.objeto.y = Math.min(v.objeto.y, frente - distancia);
+      else v.objeto.x = Math.max(v.objeto.x, -frente + distancia);
+    }
     if (v.luz) {
       const fase = Math.floor(this.piscar / 220) % 2 === 0;
       v.luz.setFillStyle(fase ? 0xff1744 : 0x2979ff);
     }
+    return c.via === 'Norte' ? v.objeto.y : -v.objeto.x;
   }
 
   private criarCarro(c: Carro, x: number, y: number): VisualCarro {

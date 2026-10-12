@@ -3,7 +3,7 @@
 
 import Phaser from 'phaser';
 import type { Fase } from '../core/fases';
-import { gerarJs } from '../core/gerarJs';
+import { gerarJs, linhaParaTexto } from '../core/gerarJs';
 import { avaliarFase, descreverObjetivo } from '../core/objetivos';
 import { ErroPrograma, montarPrograma, type Linha } from '../core/programa';
 import { Simulacao, TICKS_POR_SEGUNDO } from '../core/simulacao';
@@ -13,12 +13,12 @@ import { publicarEstado } from '../testeHook';
 import * as sons from '../audio';
 import { abrirJanela, el } from '../ui/dom';
 import { EditorCodigo } from '../ui/editorCodigo';
-import { Mesa } from '../ui/mesa';
+import { Mesa, testidDoBloco } from '../ui/mesa';
 import type { AcoesPainel, EstadoPainel, PainelFase } from '../ui/painelFase';
 import { Tutorial } from '../ui/tutorial';
 import { LARGURA, VistaCruzamento } from './vistaCruzamento';
 import { Vista3D } from './vista3d/Vista3D';
-import { MonitorFPS } from './vista3d/detectorWebGL';
+import { MonitorFPS, lembrarQualidade3D, qualidade3D } from './vista3d/detectorWebGL';
 
 const VELOCIDADES = [1, 2, 4];
 /** Limite de ticks por frame, para um celular lento não travar. */
@@ -54,7 +54,8 @@ export class CruzamentoScene extends Phaser.Scene {
       ambulancia: (this.fase.transito.ambulancias?.length ?? 0) > 0,
     });
 
-    if (ctx.modo3D) {
+    // Se nesta sessão o aparelho já não aguentou o 3D, abre direto no 2D (sem piscar).
+    if (ctx.modo3D && qualidade3D() !== 'desligado') {
       this.ativar3D();
     }
 
@@ -95,12 +96,29 @@ export class CruzamentoScene extends Phaser.Scene {
   private tentarTutorial(): void {
     const p = contexto().progresso;
     if (this.fase.id === 1 && !p.tutorialOmitido) {
+      // O tutorial guia o jogador pela solução da fase 1, bloco a bloco (vem do fases.json),
+      // e só então manda iniciar. Antes ele parava em abrirSinal("Norte") e o programa
+      // falhava na hora, sem explicar o porquê.
+      const passos = this.fase.solucao;
+      const dicaDoPasso: Record<number, string> = {
+        0: 'abre o sinal do Norte',
+        1: 'dá tempo para os carros do Norte passarem',
+        2: 'fecha o Norte antes de abrir o outro (senão bate!)',
+        3: 'agora é a vez do Leste',
+        4: 'tempo para os carros do Leste passarem',
+        5: 'fecha o Leste. O algoritmo recomeça do início sozinho',
+      };
+      const etapasBlocos = passos.map((linha, i) => ({
+        texto: `${i + 1}/${passos.length}: toque em ${linhaParaTexto(linha)}: ${dicaDoPasso[i] ?? ''}`.replace(/: $/, '.'),
+        alvo: testidDoBloco(linha),
+        gatilho: () => this.mesa.linhas.length > i,
+      }));
       this.tutorial = new Tutorial([
-        { texto: 'Olá! Eu sou o Sinaleiro. Vou te ensinar a controlar o trânsito!' },
-        { texto: 'Sua missão é deixar todos os carros passarem sem bater.', alvo: 'gaveta' },
-        { texto: 'Toque (ou arraste) o bloco verde abrirSinal("Norte") para colocá-lo no seu algoritmo.', alvo: 'algoritmo', gatilho: () => this.mesa.linhas.length > 0 },
-        { texto: 'Agora toque em INICIAR TRÁFEGO para ver o que acontece!', alvo: 'btn-iniciar', gatilho: () => this.estado === 'rodando' },
-        { texto: 'Muito bem! Você está no controle.', gatilho: () => !this.sim?.ativa }
+        { texto: 'Olá! Eu sou o Sinaleiro. Vou te ensinar a controlar o trânsito! (toque aqui)' },
+        { texto: 'Você monta um algoritmo com os blocos. Ele repete sem parar enquanto a fase dura. Bora montar o primeiro?', alvo: 'gaveta' },
+        ...etapasBlocos,
+        { texto: 'Pronto! Agora toque em INICIAR TRÁFEGO e veja os carros passarem sem bater.', alvo: 'btn-iniciar', gatilho: () => this.estado === 'rodando' },
+        { texto: 'Isso! Se der algo errado, a linha com problema fica vermelha. Bom trabalho, controlador!', gatilho: () => this.estado !== 'rodando' },
       ], () => {
         p.tutorialOmitido = true;
         salvarProgresso(p);
@@ -335,12 +353,39 @@ export class CruzamentoScene extends Phaser.Scene {
     this.game.canvas.style.opacity = '0';
     this.game.canvas.style.pointerEvents = 'none';
 
-    // Se cair para < 30 FPS nos primeiros 3 segundos, desliga o 3D e volta ao 2D.
+    // Mede o FPS (ignorando o primeiro segundo de aquecimento) em etapas:
+    //  - 24 FPS ou mais: segue em 3D (muitos celulares travam em 30 FPS no modo econômico);
+    //  - entre 10 e 24: reduz a qualidade do 3D e mede de novo;
+    //  - ainda abaixo de 15 depois disso: aí sim volta para o 2D, que é injogável assim;
+    //  - abaixo de 10 já na primeira medição (sem placa de vídeo): vai direto para o 2D.
     // `?3d=sempre` mantém o 3D mesmo assim (testes e prints em máquinas sem placa de vídeo).
     if (new URLSearchParams(location.search).get('3d') === 'sempre') return;
-    this.monitorFPS = new MonitorFPS(3000, () => {
-      console.warn('FPS muito baixo (< 30). Desligando 3D e usando fallback 2D para a cena.');
-      this.desligar3D();
+    const medirEconomico = (): void => {
+      this.monitorFPS = new MonitorFPS(3000, (fps2) => {
+        if (fps2 >= 15) return;
+        console.warn(`3D a ${fps2.toFixed(0)} FPS mesmo em qualidade baixa: usando a vista 2D.`);
+        lembrarQualidade3D('desligado');
+        this.desligar3D();
+      }, 500);
+    };
+    // Já se sabe que precisa do modo econômico: aplica de cara e só confere se basta.
+    if (qualidade3D() === 'economico') {
+      this.vista3D.reduzirQualidade();
+      medirEconomico();
+      return;
+    }
+    this.monitorFPS = new MonitorFPS(2000, (fps) => {
+      if (fps >= 24 || !this.vista3D) return;
+      if (fps < 10) {
+        console.warn(`3D a ${fps.toFixed(0)} FPS: usando a vista 2D.`);
+        lembrarQualidade3D('desligado');
+        this.desligar3D();
+        return;
+      }
+      console.warn(`3D a ${fps.toFixed(0)} FPS: reduzindo a qualidade.`);
+      lembrarQualidade3D('economico');
+      this.vista3D.reduzirQualidade();
+      medirEconomico();
     });
   }
 
