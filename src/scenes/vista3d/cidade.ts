@@ -4,6 +4,7 @@
 // o que mantém o celular leve mesmo com dezenas de prédios e lojas.
 
 import {
+  AdditiveBlending,
   BackSide,
   BoxGeometry,
   BufferAttribute,
@@ -20,11 +21,14 @@ import {
   MeshStandardMaterial,
   Object3D,
   PlaneGeometry,
+  Points,
+  PointsMaterial,
   SphereGeometry,
+  Float32BufferAttribute,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
-import { LOJAS, texturaLetreiros } from './texturas';
+import { LOJAS, texturaLetreiros, texturaMancha } from './texturas';
 
 /** Onde o jogador fica: na calçada da esquina sudoeste, olhando para o cruzamento. */
 export const POS_JOGADOR = { x: -2.1, z: 2.1 };
@@ -93,7 +97,17 @@ function instancias(geo: BufferGeometry, mat: Material, qtd: number, projeta = t
   return m;
 }
 
-export function criarCidade(): Object3D {
+/** Como a cidade aparece: dia (luzes apagadas) ou fim de tarde/noite (luzes acesas). */
+export interface OpcoesCidade {
+  /** Fração das janelas com a luz acesa (0 a 1). */
+  janelasAcesas: number;
+  /** Postes, vitrines e letreiros acesos. */
+  luzesAcesas: boolean;
+  /** Força das manchas de luz dos postes no chão (0 = nenhuma). */
+  luzNoChao: number;
+}
+
+export function criarCidade(op: OpcoesCidade = { janelasAcesas: 0.12, luzesAcesas: false, luzNoChao: 0 }): Object3D {
   const raiz = new Object3D();
   raiz.name = 'cidade';
   const m = new Matrix4();
@@ -139,7 +153,7 @@ export function criarCidade(): Object3D {
             y,
             z: p.z + (nz === 0 ? c : nz * (p.d / 2 + 0.006)),
             rotY: Math.atan2(nx, nz),
-            acesa: r() < 0.12,
+            acesa: r() < op.janelasAcesas,
             cor: p.cor,
           });
         }
@@ -150,7 +164,7 @@ export function criarCidade(): Object3D {
   // Planos de 2 triângulos cada. A moldura com pouco contraste evita o "chiado" de longe.
   const molduras = instancias(new PlaneGeometry(0.34, 0.4), new MeshLambertMaterial({ color: 0xffffff }), janelas.length, false);
   const vidros = instancias(new PlaneGeometry(0.27, 0.33).translate(0, 0, 0.006), new MeshStandardMaterial({ color: 0xffffff, roughness: 0.12, metalness: 0.75 }), janelas.length, false);
-  const corAcesa = new Color(0xffe2a0);
+  const corAcesa = new Color(op.luzesAcesas ? 0xffd27a : 0xffe2a0);
   const corApagada = new Color(0x34506a);
   const branco = new Color(0xffffff);
   janelas.forEach((j, i) => {
@@ -163,7 +177,14 @@ export function criarCidade(): Object3D {
   grupoPredios.add(molduras, vidros);
 
   // ── Lojas no térreo: vitrine, toldo colorido e letreiro com o nome
-  const vitrines = instancias(new BoxGeometry(1, 1, 1), new MeshStandardMaterial({ color: 0x1b2a36, roughness: 0.06, metalness: 0.85 }), predios.length, false);
+  const vitrines = instancias(new BoxGeometry(1, 1, 1), new MeshStandardMaterial({
+      color: 0x1b2a36,
+      roughness: 0.06,
+      metalness: 0.85,
+      // Lojas abertas no fim do dia: a vitrine "acende" por dentro
+      emissive: op.luzesAcesas ? 0xffcf8a : 0x000000,
+      emissiveIntensity: op.luzesAcesas ? 0.55 : 0,
+    }), predios.length, false);
   const portas = instancias(new BoxGeometry(1, 1, 1), new MeshStandardMaterial({ color: 0x3b3f44, roughness: 0.5, metalness: 0.5 }), predios.length, false);
   const toldos = instancias(new BoxGeometry(1, 1, 1), new MeshLambertMaterial({ color: 0xffffff }), predios.length, true);
   const placasLojas: BufferGeometry[] = [];
@@ -203,7 +224,7 @@ export function criarCidade(): Object3D {
     placasLojas.push(g);
   });
   grupoPredios.add(vitrines, portas, toldos);
-  const letreiros = new Mesh(mergeGeometries(placasLojas)!, new MeshStandardMaterial({ map: texturaLetreiros(), roughness: 0.45, emissive: 0xffffff, emissiveMap: texturaLetreiros(), emissiveIntensity: 0.25 }));
+  const letreiros = new Mesh(mergeGeometries(placasLojas)!, new MeshStandardMaterial({ map: texturaLetreiros(), roughness: 0.45, emissive: 0xffffff, emissiveMap: texturaLetreiros(), emissiveIntensity: op.luzesAcesas ? 1.1 : 0.25 }));
   grupoPredios.add(letreiros);
 
   // ── Telhado: caixas d'água azuis e aparelhos de ar-condicionado
@@ -267,7 +288,12 @@ export function criarCidade(): Object3D {
     new CylinderGeometry(0.014, 0.014, 0.55, 6).rotateZ(Math.PI / 2 - 0.25).translate(0.26, 1.74, 0),
   ])!;
   const hastes = instancias(posteGeo, new MeshStandardMaterial({ color: 0x5f656c, roughness: 0.45, metalness: 0.6 }), postesOk.length);
-  const cabecas = instancias(new BoxGeometry(0.2, 0.04, 0.09), new MeshStandardMaterial({ color: 0x3a3f45, roughness: 0.5, metalness: 0.4 }), postesOk.length);
+  const cabecas = instancias(
+    new BoxGeometry(0.2, 0.04, 0.09),
+    new MeshStandardMaterial({ color: 0x3a3f45, roughness: 0.5, metalness: 0.4, emissive: 0xffe2a8, emissiveIntensity: op.luzesAcesas ? 2.2 : 0 }),
+    postesOk.length,
+  );
+  const pontosDeLuz: [number, number][] = [];
   postesOk.forEach(([x, z, rot], i) => {
     tmp.position.set(x, Y_CALCADA, z);
     tmp.rotation.set(0, rot, 0);
@@ -278,8 +304,26 @@ export function criarCidade(): Object3D {
     tmp.translateY(1.8);
     tmp.updateMatrix();
     cabecas.setMatrixAt(i, tmp.matrix);
+    pontosDeLuz.push([tmp.position.x, tmp.position.z]);
   });
   raiz.add(hastes, cabecas);
+
+  // Luz dos postes no chão: manchas amareladas suaves (bem mais leve que luzes de verdade)
+  if (op.luzNoChao > 0) {
+    const poca = new PlaneGeometry(2.2, 2.2).rotateX(-Math.PI / 2);
+    const manchas = instancias(
+      poca,
+      new MeshBasicMaterial({ map: texturaMancha(), color: 0xffd9a0, transparent: true, opacity: op.luzNoChao, blending: AdditiveBlending, depthWrite: false }),
+      pontosDeLuz.length,
+      false,
+    );
+    pontosDeLuz.forEach(([x, z], i) => {
+      const naPista = Math.abs(x) < 1.3 || Math.abs(z) < 1.3;
+      manchas.setMatrixAt(i, m.makeTranslation(x, (naPista ? 0.1 : Y_CALCADA) + 0.008, z));
+    });
+    manchas.renderOrder = 1;
+    raiz.add(manchas);
+  }
 
   // ── Posto do guarda: plataforma onde o jogador fica em pé
   const posto = new Mesh(new CylinderGeometry(0.42, 0.48, 0.3, 20), new MeshLambertMaterial({ color: 0xf2c94c }));
@@ -296,14 +340,18 @@ export function criarCidade(): Object3D {
 /** Cor do horizonte: o nevoeiro usa a mesma cor para a cidade "sumir" no céu. */
 export const COR_HORIZONTE = 0xd6e6f0;
 
-/** Domo de céu com degradê (azul em cima, claro no horizonte) e um brilho em volta do sol. */
-export function criarCeu(direcaoSol: { x: number; y: number; z: number }): Mesh {
+/** Domo de céu com degradê (topo → horizonte) e um brilho em volta do sol (ou da lua). */
+export function criarCeu(
+  direcaoSol: { x: number; y: number; z: number },
+  cores: { topo: number; horizonte: number; brilho: number; forcaBrilho: number } = { topo: 0x3d7fc4, horizonte: COR_HORIZONTE, brilho: 0xfff4dc, forcaBrilho: 0.8 },
+  estrelas = false,
+): Object3D {
   const geo = new SphereGeometry(120, 32, 16);
   const pos = geo.attributes.position;
-  const cores = new Float32Array(pos.count * 3);
-  const topo = new Color(0x3d7fc4);
-  const horizonte = new Color(COR_HORIZONTE);
-  const brilho = new Color(0xfff4dc);
+  const lista = new Float32Array(pos.count * 3);
+  const topo = new Color(cores.topo);
+  const horizonte = new Color(cores.horizonte);
+  const brilho = new Color(cores.brilho);
   const len = Math.hypot(direcaoSol.x, direcaoSol.y, direcaoSol.z);
   const c = new Color();
   for (let i = 0; i < pos.count; i++) {
@@ -313,12 +361,30 @@ export function criarCeu(direcaoSol: { x: number; y: number; z: number }): Mesh 
     const t = Math.max(0, Math.min(1, y));
     c.copy(horizonte).lerp(topo, Math.pow(t, 0.55));
     const perto = Math.max(0, (x * direcaoSol.x + y * direcaoSol.y + z * direcaoSol.z) / len);
-    c.lerp(brilho, Math.pow(perto, 12) * 0.8);
-    cores.set([c.r, c.g, c.b], i * 3);
+    c.lerp(brilho, Math.pow(perto, 10) * cores.forcaBrilho);
+    lista.set([c.r, c.g, c.b], i * 3);
   }
-  geo.setAttribute('color', new BufferAttribute(cores, 3));
+  geo.setAttribute('color', new BufferAttribute(lista, 3));
   const ceu = new Mesh(geo, new MeshBasicMaterial({ vertexColors: true, side: BackSide, fog: false, depthWrite: false, toneMapped: false }));
   ceu.name = 'ceu';
   ceu.renderOrder = -1;
-  return ceu;
+  if (!estrelas) return ceu;
+
+  // Estrelas: pontinhos na metade de cima do céu, mais a lua
+  const r = rng(3);
+  const pontos: number[] = [];
+  for (let i = 0; i < 700; i++) {
+    const a = r() * Math.PI * 2;
+    const h = 0.12 + r() * 0.88;
+    const raio = Math.sqrt(1 - h * h);
+    pontos.push(Math.cos(a) * raio * 110, h * 110, Math.sin(a) * raio * 110);
+  }
+  const gEstrelas = new BufferGeometry();
+  gEstrelas.setAttribute('position', new Float32BufferAttribute(pontos, 3));
+  const ceuNoturno = new Object3D();
+  ceuNoturno.add(ceu, new Points(gEstrelas, new PointsMaterial({ color: 0xffffff, size: 1.6, sizeAttenuation: false, fog: false, transparent: true, opacity: 0.85, depthWrite: false })));
+  const lua = new Mesh(new SphereGeometry(3.2, 16, 12), new MeshBasicMaterial({ color: 0xf4f1e6, fog: false, toneMapped: false }));
+  lua.position.set(direcaoSol.x, direcaoSol.y, direcaoSol.z).normalize().multiplyScalar(100);
+  ceuNoturno.add(lua);
+  return ceuNoturno;
 }

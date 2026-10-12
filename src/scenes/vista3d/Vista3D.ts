@@ -16,12 +16,10 @@ import {
   DirectionalLight,
   Fog,
   HemisphereLight,
-  InstancedMesh,
   Material,
   Matrix4,
   Mesh,
   MeshBasicMaterial,
-  MeshStandardMaterial,
   Object3D,
   PCFSoftShadowMap,
   PMREMGenerator,
@@ -36,17 +34,12 @@ import type { Via } from '../../core/ast';
 import { VIAS } from '../../core/ast';
 import { sirene } from '../../audio';
 import type { Carro, Simulacao } from '../../core/simulacao';
-import { COR_HORIZONTE, POS_JOGADOR, criarCeu } from './cidade';
-import {
-  COR_LUZ,
-  Y_ASFALTO,
-  corDoCarro,
-  criarCenario,
-  criarMeshAmbulancia,
-  criarSemaforo,
-  gerarPecasCarro,
-  type Semaforo,
-} from './geometrias';
+import { type Ambiente, PRESETS, type Preset } from './ambiente';
+import { Chuva3D } from './chuva3d';
+import { POS_JOGADOR, criarCeu } from './cidade';
+import { COR_LUZ, Y_ASFALTO, criarCenario, criarMeshAmbulancia, criarSemaforo, type Semaforo } from './geometrias';
+import { Pedestres } from './pedestres';
+import { Frota, type Vaga } from './veiculos';
 
 // ──────────────────────────────── constantes de layout (unidades 3D; carro ≈ 1 unidade)
 const MEIO = 1.3;
@@ -58,15 +51,16 @@ const ESPACO_FILA = 1.65; // carro tem 0,95 de comprimento: deixa ~0,7 de vão e
 const Y_CARRO = Y_ASFALTO;
 /** Altura da calçada (onde ficam os semáforos). */
 const Y_CALCADA = 0.14;
-/** De onde vem o sol: oeste, à tarde. As sombras dos carros caem de lado, à vista do guarda. */
-const DIRECAO_SOL = { x: -10, y: 14, z: 5 };
+/** Quanto tempo (de jogo) a luz amarela fica acesa quando um sinal fecha. */
+const MS_AMARELO = 900;
+/** O sinal precisa estar fechado há este tempo para os pedestres começarem a atravessar. */
+const MS_ANTES_DE_ATRAVESSAR = 350;
 /** De onde um carro novo "vem dirigindo" (atrás do fim da fila). */
 const DISTANCIA_CHEGADA = 22;
 /** Quanto tempo um carro que já cruzou continua visível seguindo em frente. */
 const MS_SAINDO = 2500;
 const VELOCIDADE_SAIDA = 3.2; // unidades por segundo
 
-const MAX_CARROS = 48;
 /** Metade do lado da área que precisa aparecer inteira na vista de cima. */
 const RAIO_VISIVEL = 7;
 
@@ -102,7 +96,7 @@ interface VisualCarro {
   ambulancia: boolean;
   posAtual: Vector3;
   meshAmb: Object3D | null;
-  instancia: number | null;
+  vaga: Vaga | null;
   parado: boolean;
   /** Preenchido quando o carro já saiu da simulação e está indo embora. */
   saindoDesde: number | null;
@@ -136,20 +130,22 @@ export class Vista3D {
 
   private sim: Simulacao | null = null;
   private readonly carros = new Map<number, VisualCarro>();
-  private readonly instanciasLivres: number[] = [];
   private readonly matrizTmp = new Matrix4();
-  private readonly escondido = new Matrix4().makeTranslation(999, -999, 999);
 
-  /** Lataria (cor de cada carro) e lanternas (acendem ao frear). */
-  private readonly corpos: InstancedMesh;
-  private readonly lanternas: InstancedMesh;
-  /** Todas as peças do carro (lataria, vidros, pneus, cromados, faróis, lanternas). */
-  private readonly pecas: InstancedMesh[];
-  private readonly corFreio = new Color(0xff2a1a);
-  private readonly corLanterna = new Color(0x6a1010);
+  /** Sedãs, hatches, SUVs, furgões e motos (instanciados por tipo). */
+  private readonly frota: Frota;
+  private readonly pedestres: Pedestres;
+  private readonly chuva: Chuva3D | null = null;
+  private readonly preset: Preset;
   private readonly sol: DirectionalLight;
 
-  private readonly luzes: Record<Via, Semaforo['luzes']> = {} as Record<Via, Semaforo['luzes']>;
+  private readonly semaforos: Record<Via, Semaforo> = {} as Record<Via, Semaforo>;
+  /** Tempo de jogo (ms, já com a velocidade) — para a luz amarela e os pedestres. */
+  private tempoJogo = 0;
+  private readonly estadoSinal: Record<Via, { aberto: boolean; mudouEm: number }> = {
+    Norte: { aberto: false, mudouEm: -1e9 },
+    Leste: { aberto: false, mudouEm: -1e9 },
+  };
   private piscar = 0;
   private ultimoQuadro = performance.now();
 
@@ -176,7 +172,12 @@ export class Vista3D {
   private observador: ResizeObserver | null = null;
   private readonly aoTeclar = (e: KeyboardEvent): void => this.teclado(e);
 
-  constructor(private readonly elementoPai: HTMLElement) {
+  constructor(
+    private readonly elementoPai: HTMLElement,
+    opcoes: { ambiente?: Ambiente } = {},
+  ) {
+    this.preset = PRESETS[opcoes.ambiente ?? 'dia'];
+    const pr = this.preset;
     // Celular: telas de alta densidade já ficam nítidas a 1,5× e quase não precisam de
     // antialiasing; isso reduz bastante o trabalho da placa de vídeo do aparelho.
     const telaPequena = Math.min(window.innerWidth, window.innerHeight) < 820;
@@ -185,7 +186,7 @@ export class Vista3D {
     this.renderer.setPixelRatio(Math.min(dpr, telaPequena ? 1.5 : 2));
     // Cores de cinema (ACES) e sombras suaves do sol. O modo econômico desliga as sombras.
     this.renderer.toneMapping = ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
+    this.renderer.toneMappingExposure = pr.exposicao;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = PCFSoftShadowMap;
 
@@ -197,20 +198,21 @@ export class Vista3D {
     this.canvas.style.touchAction = 'none';
 
     this.scene = new Scene();
-    this.scene.background = new Color(COR_HORIZONTE);
-    this.scene.add(criarCeu(DIRECAO_SOL));
+    this.scene.background = new Color(pr.ceu.horizonte);
+    this.scene.add(criarCeu(pr.sol.direcao, pr.ceu, pr.estrelas));
     // Reflexos: um "estúdio" gerado em código dá brilho à lataria, aos vidros e às vitrines.
     const pmrem = new PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.5;
+    this.scene.environmentIntensity = pr.reflexos;
     pmrem.dispose();
 
     this.camera = new PerspectiveCamera(60, 1, 0.05, 260);
 
     // ── Iluminação: luz do céu (azulada por cima, cor do chão por baixo) + sol de tarde
-    this.scene.add(new HemisphereLight(0xcfe4ff, 0x6e6552, 1.1));
-    const sol = new DirectionalLight(0xffeccc, 2.6);
-    sol.position.set(DIRECAO_SOL.x, DIRECAO_SOL.y, DIRECAO_SOL.z);
+    this.scene.add(new HemisphereLight(pr.hemisferio.ceu, pr.hemisferio.chao, pr.hemisferio.intensidade));
+    const sol = new DirectionalLight(pr.sol.cor, pr.sol.intensidade);
+    // Sol baixo (fim de tarde) fica mais perto: a câmera de sombra continua cobrindo o cruzamento
+    sol.position.set(pr.sol.direcao.x, pr.sol.direcao.y, pr.sol.direcao.z).normalize().multiplyScalar(20);
     sol.castShadow = true;
     sol.shadow.mapSize.set(telaPequena ? 1024 : 2048, telaPequena ? 1024 : 2048);
     const cs = sol.shadow.camera;
@@ -225,7 +227,7 @@ export class Vista3D {
     this.scene.add(sol, sol.target);
     this.sol = sol;
 
-    this.scene.add(criarCenario());
+    this.scene.add(criarCenario({ janelasAcesas: pr.janelasAcesas, luzesAcesas: pr.luzesAcesas, luzNoChao: pr.luzNoChao, molhado: pr.chuva }));
 
     // ── Semáforos: os dois ficam na esquina em frente ao guarda (nordeste), cada um
     // junto da linha de parada da sua via — o da esquerda é o Norte, o da direita o Leste.
@@ -233,31 +235,19 @@ export class Vista3D {
     semN.grupo.position.set(MEIO + 0.6, Y_CALCADA, -MEIO - RECUO - 0.1);
     semN.grupo.rotation.y = Math.PI;
     this.scene.add(semN.grupo);
-    this.luzes.Norte = semN.luzes;
+    this.semaforos.Norte = semN;
 
     const semL = criarSemaforo();
     semL.grupo.position.set(MEIO + RECUO + 0.1, Y_CALCADA, -MEIO - 0.6);
     semL.grupo.rotation.y = Math.PI / 2;
     this.scene.add(semL.grupo);
-    this.luzes.Leste = semL.luzes;
+    this.semaforos.Leste = semL;
 
-    // ── Carros (instanciados): lataria, vidros, pneus, cromados, faróis e lanternas de freio
-    const geo = gerarPecasCarro();
-    this.corpos = new InstancedMesh(geo.pintura, new MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0.45 }), MAX_CARROS);
-    const vidros = new InstancedMesh(geo.vidro, new MeshStandardMaterial({ color: 0x0c131b, roughness: 0.05, metalness: 0.9 }), MAX_CARROS);
-    const escuro = new InstancedMesh(geo.escuro, new MeshStandardMaterial({ color: 0x17181b, roughness: 0.8 }), MAX_CARROS);
-    const cromado = new InstancedMesh(geo.cromado, new MeshStandardMaterial({ color: 0xd4d8dc, roughness: 0.25, metalness: 1 }), MAX_CARROS);
-    const farois = new InstancedMesh(geo.farois, new MeshBasicMaterial({ color: 0xfff8e8 }), MAX_CARROS);
-    this.lanternas = new InstancedMesh(geo.lanternas, new MeshBasicMaterial({ color: 0xffffff }), MAX_CARROS);
-    this.pecas = [this.corpos, vidros, escuro, cromado, farois, this.lanternas];
-    for (const malha of this.pecas) {
-      for (let i = 0; i < MAX_CARROS; i++) malha.setMatrixAt(i, this.escondido);
-      malha.frustumCulled = false; // as instâncias andam pela cena inteira
-      this.scene.add(malha);
-    }
-    this.corpos.castShadow = vidros.castShadow = escuro.castShadow = true;
-    for (let i = 0; i < MAX_CARROS; i++) this.lanternas.setColorAt(i, this.corLanterna);
-    for (let i = MAX_CARROS - 1; i >= 0; i--) this.instanciasLivres.push(i);
+    // ── Veículos (vários modelos, instanciados), pedestres e, na fase de chuva, a chuva
+    this.frota = new Frota(this.scene);
+    this.frota.ligarFachos(pr.luzesAcesas);
+    this.pedestres = new Pedestres(this.scene);
+    if (pr.chuva) this.chuva = new Chuva3D(this.scene);
 
     // ── Interface sobreposta
     this.camada = document.createElement('div');
@@ -311,15 +301,20 @@ export class Vista3D {
     this.sim = sim;
     for (const v of this.carros.values()) this.liberar(v);
     this.carros.clear();
+    // Simulação nova começa com os sinais fechados, sem "amarelo" de mentira.
+    for (const via of VIAS) this.estadoSinal[via] = { aberto: false, mudouEm: -1e9 };
   }
 
   /** Chamado pelo CruzamentoScene a cada frame (mesmo delta em ms que o Phaser usa). */
   atualizar(deltaMs: number, velocidade: number): void {
     if (!this.sim) return;
     this.piscar += deltaMs;
+    const dtJogo = deltaMs * Math.max(1, velocidade);
+    this.tempoJogo += dtJogo;
     const k = 1 - Math.exp((-deltaMs / 1000) * 6 * Math.max(1, velocidade));
-    this.sincronizarCarros(k, deltaMs * Math.max(1, velocidade));
+    this.sincronizarCarros(k, dtJogo);
     this.atualizarSemaforos();
+    this.pedestres.atualizar(dtJogo, { Norte: this.travessiaLivre('Norte'), Leste: this.travessiaLivre('Leste') });
   }
 
   mostrarBatida(): void {
@@ -336,6 +331,21 @@ export class Vista3D {
    * Modo econômico, usado quando o aparelho não aguenta: resolução 1× e sem nevoeiro.
    * O jogo continua em 3D; só fica um pouco menos nítido.
    */
+  /**
+   * Dá para atravessar a rua desta via? Sinal fechado há um tempinho e nenhum carro dela
+   * entre as duas faixas de pedestre (conta o carro desenhado, que chega um pouco depois).
+   */
+  private travessiaLivre(via: Via): boolean {
+    const st = this.estadoSinal[via];
+    if (st.aberto || this.tempoJogo - st.mudouEm < MS_ANTES_DE_ATRAVESSAR) return false;
+    for (const v of this.carros.values()) {
+      if (v.via !== via || v.parado) continue;
+      const ao = via === 'Norte' ? v.posAtual.z : -v.posAtual.x; // posição ao longo da via
+      if (ao > -2.5 && ao < 2.6) return false;
+    }
+    return true;
+  }
+
   reduzirQualidade(): void {
     this.economico = true;
     this.renderer.setPixelRatio(1);
@@ -375,7 +385,8 @@ export class Vista3D {
     this.btnVista.textContent = primeira ? 'Vista de cima' : '1ª pessoa';
     this.btnVista.setAttribute('aria-label', primeira ? 'Trocar para a vista de cima' : 'Trocar para a vista em primeira pessoa');
     // Nevoeiro só em primeira pessoa: esconde o fim da cidade no horizonte.
-    this.scene.fog = primeira && !this.economico ? new Fog(COR_HORIZONTE, 14, 70) : null;
+    const nv = this.preset.nevoa;
+    this.scene.fog = primeira && !this.economico ? new Fog(this.preset.ceu.horizonte, nv.perto, nv.longe) : null;
     const predios = this.scene.getObjectByName('predios');
     if (predios) predios.scale.y = primeira ? 1 : 0.3;
     this.yaw = YAW_INICIAL;
@@ -457,6 +468,7 @@ export class Vista3D {
       this.tremor = Math.max(0, this.tremor - dt / 400);
     }
     this.camera.lookAt(this.camOlharAtual);
+    if (this.chuva) this.chuva.atualizar(dt, this.modo === 'primeira' ? this.camera.position : this.camOlharAtual);
     this.renderer.render(this.scene, this.camera);
     this.atualizarPlacares();
   }
@@ -530,14 +542,7 @@ export class Vista3D {
         this.posicionar(v);
       }
     }
-    // Só desenha até a última instância em uso (as livres ficariam escondidas, mas custam).
-    let usadas = 0;
-    for (const v of this.carros.values()) if (v.instancia !== null) usadas = Math.max(usadas, v.instancia + 1);
-    for (const malha of this.pecas) {
-      malha.count = usadas;
-      malha.instanceMatrix.needsUpdate = true;
-    }
-    if (this.lanternas.instanceColor) this.lanternas.instanceColor.needsUpdate = true;
+    this.frota.finalizarQuadro();
   }
 
   private moverCarro(c: Carro, indice: number, k: number, vistos: Set<number>): void {
@@ -566,10 +571,9 @@ export class Vista3D {
       }
       return;
     }
-    if (v.instancia === null) return;
+    if (v.vaga === null) return;
     this.matrizTmp.makeRotationY(ROTACAO[v.via]).setPosition(v.posAtual);
-    for (const malha of this.pecas) malha.setMatrixAt(v.instancia, this.matrizTmp);
-    this.lanternas.setColorAt(v.instancia, v.parado ? this.corFreio : this.corLanterna);
+    this.frota.posicionar(v.vaga, this.matrizTmp, v.parado);
   }
 
   private criarVisualCarro(c: Carro, posInicial: Vector3): VisualCarro {
@@ -579,37 +583,39 @@ export class Vista3D {
       const mesh = criarMeshAmbulancia(c.via === 'Norte');
       mesh.position.copy(posInicial);
       this.scene.add(mesh);
-      return { ...base, ambulancia: true, meshAmb: mesh, instancia: null };
+      return { ...base, ambulancia: true, meshAmb: mesh, vaga: null };
     }
-    // Reaproveita instâncias de carros que já foram embora (antes o limite era 30 por fase).
-    const idx = this.instanciasLivres.pop() ?? null;
-    if (idx !== null) {
-      this.corpos.setColorAt(idx, corDoCarro(c.id));
-      if (this.corpos.instanceColor) this.corpos.instanceColor.needsUpdate = true;
-    }
-    return { ...base, ambulancia: false, meshAmb: null, instancia: idx };
+    // Modelo e cor saem do id do carro; a instância é reaproveitada quando ele vai embora.
+    return { ...base, ambulancia: false, meshAmb: null, vaga: this.frota.alocar(c.id) };
   }
 
   private liberar(v: VisualCarro): void {
     if (v.meshAmb) {
       v.meshAmb.removeFromParent();
-    } else if (v.instancia !== null) {
-      for (const malha of this.pecas) {
-        malha.setMatrixAt(v.instancia, this.escondido);
-        malha.instanceMatrix.needsUpdate = true;
-      }
-      this.instanciasLivres.push(v.instancia);
-      this.instanciasLivres.sort((x, y) => y - x); // o próximo carro pega a menor livre
+    } else if (v.vaga !== null) {
+      this.frota.liberar(v.vaga);
     }
   }
 
   private atualizarSemaforos(): void {
     const sim = this.sim!;
+    const noEscuro = this.preset.luzesAcesas;
     for (const via of VIAS) {
       const aberto = sim.sinais[via].aberto;
-      const l = this.luzes[via];
-      l.vermelho.color.setHex(aberto ? COR_LUZ.vermelho.apagada : COR_LUZ.vermelho.acesa);
-      l.verde.color.setHex(aberto ? COR_LUZ.verde.acesa : COR_LUZ.verde.apagada);
+      const st = this.estadoSinal[via];
+      if (st.aberto !== aberto) {
+        st.aberto = aberto;
+        st.mudouEm = this.tempoJogo;
+      }
+      // Ao fechar, o amarelo acende por um instante antes do vermelho (como na rua).
+      // Na simulação o sinal já fechou: o amarelo é o aviso de "pare se puder".
+      const amarelo = !aberto && this.tempoJogo - st.mudouEm < MS_AMARELO;
+      const acesa = { verde: aberto, amarelo, vermelho: !aberto && !amarelo };
+      const { luzes, halos } = this.semaforos[via];
+      for (const cor of ['vermelho', 'amarelo', 'verde'] as const) {
+        luzes[cor].color.setHex(acesa[cor] ? COR_LUZ[cor].acesa : COR_LUZ[cor].apagada);
+        halos[cor].opacity = acesa[cor] && noEscuro ? 0.85 : 0;
+      }
     }
   }
 }

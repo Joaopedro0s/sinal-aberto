@@ -19,12 +19,15 @@ import {
   Object3D,
   PlaneGeometry,
   SphereGeometry,
+  Sprite,
+  SpriteMaterial,
+  AdditiveBlending,
 } from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
-import { criarCidade } from './cidade';
-import { texturaAsfalto, texturaCalcada, texturaGrama, texturaPlacaRua, texturaVelocidade } from './texturas';
+import { criarCidade, type OpcoesCidade } from './cidade';
+import { texturaMancha, texturaAsfalto, texturaCalcada, texturaGrama, texturaPlacaRua, texturaVelocidade } from './texturas';
 
 /** Cores dos carros: parecidas com as da frota real (muito branco, prata, preto e cinza). */
 export const CORES_CARRO = [
@@ -34,7 +37,7 @@ export const CORES_CARRO = [
 // ──────────────────────────────────────── helpers
 
 /** Desloca (e opcionalmente gira) uma geometria e devolve ela mesma. */
-function em(g: BufferGeometry, x: number, y: number, z: number, rotZ = 0, rotY = 0): BufferGeometry {
+export function em(g: BufferGeometry, x: number, y: number, z: number, rotZ = 0, rotY = 0): BufferGeometry {
   if (rotZ) g.rotateZ(rotZ);
   if (rotY) g.rotateY(rotY);
   g.translate(x, y, z);
@@ -42,7 +45,7 @@ function em(g: BufferGeometry, x: number, y: number, z: number, rotZ = 0, rotY =
 }
 
 /** Garante os mesmos atributos (position, normal, uv) para poder fundir geometrias diferentes. */
-function fundir(lista: BufferGeometry[]): BufferGeometry {
+export function fundir(lista: BufferGeometry[]): BufferGeometry {
   const prontas = lista.map((g) => (g.index ? g.toNonIndexed() : g));
   for (const g of prontas) {
     if (!g.attributes.uv) g.setAttribute('uv', new Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
@@ -93,7 +96,12 @@ const LONGE = 120;
  * Retorna o grupo raiz do cenário estático (chão, pistas, calçadas, sinalização e cidade).
  * Não inclui carros nem semáforos — esses são criados separadamente.
  */
-export function criarCenario(): Object3D {
+export interface OpcoesCenario extends OpcoesCidade {
+  /** Asfalto molhado (chuva): brilha e reflete o céu. */
+  molhado: boolean;
+}
+
+export function criarCenario(op?: OpcoesCenario): Object3D {
   const raiz = new Object3D();
   raiz.name = 'cenario';
 
@@ -108,7 +116,10 @@ export function criarCenario(): Object3D {
     caixaChao(MEIO, LONGE, -MEIO, MEIO, 0, Y_ASFALTO, 1.6),
     caixaChao(-LONGE, -MEIO, -MEIO, MEIO, 0, Y_ASFALTO, 1.6),
   ]);
-  raiz.add(malha(asfalto, new MeshLambertMaterial({ map: texturaAsfalto() }), 'recebe'));
+  const matAsfalto = op?.molhado
+    ? new MeshStandardMaterial({ map: texturaAsfalto(), color: 0xb0b4b8, roughness: 0.28, metalness: 0.15 })
+    : new MeshLambertMaterial({ map: texturaAsfalto() });
+  raiz.add(malha(asfalto, matAsfalto, 'recebe'));
 
   // ── Calçadas nas quatro esquinas (em L) e o meio-fio claro na beira da pista
   const pecasCalcada: BufferGeometry[] = [];
@@ -155,7 +166,7 @@ export function criarCenario(): Object3D {
   raiz.add(criarPlacas());
 
   // Prédios, lojas, árvores e postes ficam em cidade.ts (instanciados).
-  raiz.add(criarCidade());
+  raiz.add(criarCidade(op));
 
   return raiz;
 }
@@ -210,6 +221,8 @@ export interface Semaforo {
   grupo: Object3D;
   /** Materiais das luzes (compartilhados pela frente e pelo verso da caixa). */
   luzes: { vermelho: MeshBasicMaterial; amarelo: MeshBasicMaterial; verde: MeshBasicMaterial };
+  /** Brilho em volta de cada luz (visível no escuro): opacidade 0 = apagado. */
+  halos: { vermelho: SpriteMaterial; amarelo: SpriteMaterial; verde: SpriteMaterial };
 }
 
 export const COR_LUZ = {
@@ -235,6 +248,9 @@ export function criarSemaforo(): Semaforo {
     amarelo: new MeshBasicMaterial({ color: COR_LUZ.amarelo.apagada }),
     verde: new MeshBasicMaterial({ color: COR_LUZ.verde.apagada }),
   };
+  const halo = (cor: number): SpriteMaterial =>
+    new SpriteMaterial({ map: texturaMancha(), color: cor, transparent: true, opacity: 0, blending: AdditiveBlending, depthWrite: false });
+  const halos = { vermelho: halo(COR_LUZ.vermelho.acesa), amarelo: halo(COR_LUZ.amarelo.acesa), verde: halo(COR_LUZ.verde.acesa) };
   const bola = new SphereGeometry(0.058, 16, 10);
   const alturas: [keyof typeof luzes, number][] = [['vermelho', 1.79], ['amarelo', 1.62], ['verde', 1.45]];
   for (const [cor, yy] of alturas) {
@@ -244,6 +260,10 @@ export function criarSemaforo(): Semaforo {
       l.scale.z = 0.5;
       grupo.add(l);
       bones.push(em(new BoxGeometry(0.16, 0.012, 0.07), 0, yy + 0.07, lado * 0.115));
+      const brilho = new Sprite(halos[cor]);
+      brilho.position.set(0, yy, lado * 0.12);
+      brilho.scale.set(0.42, 0.42, 1);
+      grupo.add(brilho);
     }
   }
   grupo.add(malha(fundir(bones), preto, 'projeta'));
@@ -251,79 +271,7 @@ export function criarSemaforo(): Semaforo {
   const fundo = malha(new BoxGeometry(0.32, 0.68, 0.01), new MeshLambertMaterial({ color: 0xf2c200 }), 'projeta');
   fundo.position.set(0, 1.62, 0);
   grupo.add(fundo);
-  return { grupo, luzes };
-}
-
-// ──────────────────────────────────────── Carro (geometrias para InstancedMesh)
-// Frente do carro em +z. Comprimento 0,95, largura 0,55 (≈ 4,2 m × 1,8 m na escala do jogo).
-
-export interface PecasCarro {
-  /** Lataria (recebe a cor de cada carro). */
-  pintura: BufferGeometry;
-  vidro: BufferGeometry;
-  /** Pneus, para-choques e grade. */
-  escuro: BufferGeometry;
-  /** Calotas e maçanetas. */
-  cromado: BufferGeometry;
-  farois: BufferGeometry;
-  lanternas: BufferGeometry;
-}
-
-/** Cabine de vidro com o teto mais estreito que a base (para-brisa e vigia inclinados). */
-function cabine(): BufferGeometry {
-  const g = new BoxGeometry(0.47, 0.15, 0.52);
-  const p = g.attributes.position;
-  for (let i = 0; i < p.count; i++) {
-    if (p.getY(i) > 0) {
-      p.setX(i, p.getX(i) * 0.86);
-      p.setZ(i, p.getZ(i) * 0.7 - 0.02);
-    }
-  }
-  g.computeVertexNormals();
-  return em(g, 0, 0.305, -0.04);
-}
-
-export function gerarPecasCarro(): PecasCarro {
-  const rodas: BufferGeometry[] = [];
-  const calotas: BufferGeometry[] = [];
-  for (const x of [-0.245, 0.245]) {
-    for (const z of [-0.31, 0.31]) {
-      rodas.push(em(new CylinderGeometry(0.088, 0.088, 0.075, 12), x, 0.088, z, Math.PI / 2));
-      calotas.push(em(new CylinderGeometry(0.05, 0.05, 0.08, 8), x, 0.088, z, Math.PI / 2));
-    }
-  }
-  return {
-    pintura: fundir([
-      em(new RoundedBoxGeometry(0.55, 0.165, 0.95, 2, 0.055), 0, 0.152, 0),
-      em(new RoundedBoxGeometry(0.4, 0.035, 0.37, 2, 0.015), 0, 0.392, -0.056),
-      // Retrovisores
-      em(new BoxGeometry(0.05, 0.035, 0.05), -0.29, 0.255, 0.13),
-      em(new BoxGeometry(0.05, 0.035, 0.05), 0.29, 0.255, 0.13),
-    ]),
-    vidro: fundir([cabine()]),
-    escuro: fundir([
-      ...rodas,
-      em(new BoxGeometry(0.565, 0.055, 0.06), 0, 0.1, 0.465),
-      em(new BoxGeometry(0.565, 0.055, 0.06), 0, 0.1, -0.465),
-      em(new BoxGeometry(0.26, 0.04, 0.012), 0, 0.17, 0.476),
-    ]),
-    cromado: fundir([
-      ...calotas,
-      // Maçanetas
-      ...[-0.278, 0.278].flatMap((x) => [em(new BoxGeometry(0.008, 0.012, 0.04), x, 0.2, 0.06), em(new BoxGeometry(0.008, 0.012, 0.04), x, 0.2, -0.14)]),
-    ]),
-    farois: fundir([
-      em(new BoxGeometry(0.11, 0.045, 0.012), -0.19, 0.175, 0.474),
-      em(new BoxGeometry(0.11, 0.045, 0.012), 0.19, 0.175, 0.474),
-      // Placas (brancas, padrão Mercosul) na frente e atrás
-      em(new BoxGeometry(0.14, 0.04, 0.006), 0, 0.1, 0.497),
-      em(new BoxGeometry(0.14, 0.04, 0.006), 0, 0.1, -0.497),
-    ]),
-    lanternas: fundir([
-      em(new BoxGeometry(0.12, 0.05, 0.012), -0.19, 0.18, -0.474),
-      em(new BoxGeometry(0.12, 0.05, 0.012), 0.19, 0.18, -0.474),
-    ]),
-  };
+  return { grupo, luzes, halos };
 }
 
 // ──────────────────────────────────────── Ambulância (mesh individual)
